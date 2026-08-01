@@ -1,0 +1,90 @@
+{
+  "architectureContractV": 1,
+  "name": "Weavatrix Edit fail-closed transformation library",
+  "style": "layered-library",
+  "enforcement": "strict",
+  "components": [
+    {
+      "id": "contract",
+      "name": "Wire model, limits, validation, paths, and typed errors",
+      "paths": [
+        "src/error.rs",
+        "src/limits.rs",
+        "src/model.rs",
+        "src/path.rs",
+        "src/validation.rs"
+      ]
+    },
+    {
+      "id": "coordinates",
+      "name": "Strict UTF-8, UTF-16, and UTF-32 coordinate conversion",
+      "paths": ["src/coordinates.rs"]
+    },
+    {
+      "id": "application",
+      "name": "Prepared edit validation, composition, projection, and application",
+      "paths": ["src/application"]
+    },
+    {
+      "id": "facade",
+      "name": "Public crate facade",
+      "paths": ["src/lib.rs"]
+    },
+    {
+      "id": "verification",
+      "name": "Tests, benchmarks, and competitor harnesses",
+      "paths": ["tests", "benches", "tools"]
+    },
+    {
+      "id": "documentation",
+      "name": "Public contracts and evidence",
+      "paths": ["README.md", "docs"]
+    }
+  ],
+  "dependencyRules": [
+    {
+      "id": "runtime-does-not-depend-on-verification",
+      "action": "forbid",
+      "from": ["contract", "coordinates", "application", "facade"],
+      "to": ["verification"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "contract-is-inward",
+      "action": "forbid",
+      "from": ["contract"],
+      "to": ["coordinates", "application", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "coordinates-do-not-own-application",
+      "action": "forbid",
+      "from": ["coordinates"],
+      "to": ["application", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "application-does-not-depend-on-facade",
+      "action": "forbid",
+      "from": ["application"],
+      "to": ["facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    }
+  ],
+  "budgets": {
+    "runtimeCycles": 0,
+    "maxFileLoc": 300,
+    "maxFunctionLoc": 100
+  },
+  "technologies": {
+    "required": ["rust"],
+    "forbidden": ["unsafe-rust"]
+  },
+  "exceptions": [],
+  "ratchet": {
+    "baseline": {
+      "fingerprints": [],
+      "metrics": {}
+    }
+  }
+}

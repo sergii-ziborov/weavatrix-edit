@@ -1,0 +1,16 @@
+[package]
+name = "weavatrix-edit-competitor-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+weavatrix-edit = { path = "../.." }
+mago-text-edit = "=1.45.0"
+ra_ap_text_edit = "=0.0.241"
+typst-edit = "=0.1.0"
+
+[lints.rust]
+unsafe_code = "forbid"

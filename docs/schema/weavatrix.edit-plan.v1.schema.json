@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Weavatrix Edit Plan v1",
+  "description": "Extensible, evidence-backed multi-file source edit plan. Runtime validation additionally enforces cross-field ranges, portable path uniqueness, resource budgets, and exact source text.",
+  "type": "object",
+  "required": ["schemaVersion", "operation", "files"],
+  "properties": {
+    "schemaVersion": {
+      "const": "weavatrix.edit-plan.v1"
+    },
+    "operation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "completeness": {
+      "enum": ["COMPLETE", "PARTIAL"]
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/fileEdit"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "fileEdit": {
+      "type": "object",
+      "required": ["path", "sha256", "edits"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Portable repository-relative path using forward slashes. Runtime validation enforces byte and segment rules."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2000,
+          "items": {
+            "$ref": "#/$defs/textEdit"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "textEdit": {
+      "type": "object",
+      "required": [
+        "startLine",
+        "startChar",
+        "endLine",
+        "endChar",
+        "before",
+        "after",
+        "provenance"
+      ],
+      "properties": {
+        "startLine": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "startChar": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "endLine": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "endChar": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "before": {
+          "type": "string",
+          "description": "Mandatory exact original text. Runtime validation requires before and after to differ."
+        },
+        "after": {
+          "type": "string"
+        },
+        "provenance": {
+          "enum": ["EXACT_LSP", "RESOLVED", "EXTRACTED", "LEXICAL_EXACT"]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

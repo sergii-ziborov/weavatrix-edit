@@ -1,3 +1,9 @@
+/// Absolute UTF-8 byte ceiling for a caller-defined operation label.
+///
+/// This hard ceiling is independent of caller-configurable plan budgets so a
+/// validated plan cannot carry unbounded metadata into hashing or journaling.
+pub const MAX_PLAN_OPERATION_BYTES: usize = 4_096;
+
 /// Bounded validation limits for a multi-file edit plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlanLimits {

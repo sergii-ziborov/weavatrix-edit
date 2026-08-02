@@ -25,7 +25,7 @@ either be returned in memory or streamed to a caller-owned `std::io::Write`.
 - validated insert, delete, and replacement operations over immutable source;
 - exact `before` checks, Unicode-scalar boundaries, overlap detection, and
   stable same-position insertion order;
-- bounded source, edit-count, output-size, and multi-file plan validation;
+- bounded operation labels, source, edit-count, output-size, and multi-file plan validation;
 - fallible reusable line indexing with explicit line-count and index-byte
   ceilings;
 - bounded incremental admission of original-source byte edits with atomic
@@ -118,6 +118,9 @@ whole set before constructing output, so earlier edits never shift later ones.
 
 `PreparedEdits::bytes_before` and `bytes_after` expose exact preflight sizes so
 a transaction layer can enforce an aggregate multi-file budget before writing.
+Plan operation labels have the patch-compatible hard ceiling
+`MAX_PLAN_OPERATION_BYTES` (4 KiB); text, file, and edit ceilings remain
+caller-configurable through `PlanLimits`.
 
 Hot replay loops can retain their output allocation. `apply_into` refills a
 caller-owned `String`; `apply_into_bytes` writes the same guaranteed-valid UTF-8

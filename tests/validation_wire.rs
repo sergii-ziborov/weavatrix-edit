@@ -1,7 +1,7 @@
 use blazingly_json::{from_str, to_string};
 use weavatrix_edit::{
-    Completeness, EDIT_PLAN_SCHEMA, EditPlan, ErrorCode, FileEdit, Position, Provenance, TextEdit,
-    TextRange,
+    Completeness, EDIT_PLAN_SCHEMA, EditPlan, ErrorCode, FileEdit, MAX_PLAN_OPERATION_BYTES,
+    Position, Provenance, TextEdit, TextRange,
 };
 
 const SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -47,6 +47,22 @@ fn accepts_the_frozen_schema_and_open_operation_names() {
 
     let empty_files = EditPlan::new("rename_symbol", Vec::new());
     assert_eq!(validation_code(&empty_files), ErrorCode::InvalidPlan);
+}
+
+#[test]
+fn operation_labels_obey_the_absolute_byte_budget() {
+    let mut exact = plan_with_file("src/a.rs");
+    exact.operation = "x".repeat(MAX_PLAN_OPERATION_BYTES);
+    assert!(exact.validate().is_ok());
+
+    let mut oversized = exact;
+    oversized.operation.push('x');
+    let error = oversized.validate().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PlanTooLarge);
+
+    oversized.operation = "x".repeat(9 * 1024 * 1024);
+    let error = oversized.validate().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PlanTooLarge);
 }
 
 #[test]

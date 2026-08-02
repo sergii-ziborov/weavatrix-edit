@@ -329,14 +329,17 @@ to remain cold for the primary rows. Caller-`String` and caller-`Vec` results
 are reported separately because the adapters required by Mago and
 rust-analyzer differ; allocating prepared and admission rows are report-only.
 
-The implementation and benchmark methodology are frozen before recording
-release evidence. Exact clean-commit raw samples and summarized tables are
-added in a separate evidence commit, so earlier dirty-tree measurements cannot
-be mistaken for the shipped implementation. No universal 2x claim is made:
-large caller-buffer results can clear that threshold against Mago, while
-rust-analyzer's caller-String path can share the same unavoidable memory-copy
-floor on small and equal-length workloads. See [the benchmark contract and
-reproduction protocol](docs/benchmarks.md).
+The clean `228f952` release run measured the default-limit 10 MiB / 2,000-edit
+caller-`String` replay at 2.14 ms versus Mago's 5.44 ms (2.54x by median). The
+predeclared conservative gate uses fastest-competitor p25 divided by Weavatrix
+p75 and passed at 2.24x. In the complete matrix, Weavatrix beat Mago on every
+caller-owned String and Vec workload.
+
+No universal 2x claim is made. Equal-length caller-`String` replay shares a
+full-copy memory floor with rust-analyzer, which was about 9% faster on that
+one recorded row; Weavatrix's direct caller-Vec path was 2.16x faster there.
+See [the benchmark contract](docs/benchmarks.md) and the
+[exact clean-commit environment, matrix, and raw samples](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/benchmark-results/2026-08-02-windows-clean-228f952.md).
 
 ## Limitations
 

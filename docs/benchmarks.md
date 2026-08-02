@@ -14,10 +14,19 @@ gate; a following evidence-only commit records the exact commit hash,
 environment, raw samples, summaries, command, and exit status. Dirty-tree
 exploratory runs are deliberately not retained here.
 
-This two-commit protocol is currently awaiting the clean implementation commit.
-No earlier raw artifact supports the new explicit output cache, bulk
-equal-length patching, capped same-offset execution runs, or fused admission
-path, so those stale measurements have been removed rather than relabelled.
+The 0.1.2 implementation was frozen in clean commit
+`228f95227c49f0c750bbecb3d02d267c0ab45cf0`. The complete matrix and a separate
+predeclared default-ceiling raw gate were then run without source changes. The
+following evidence-only commit records the commands, run windows, environment,
+summaries, and every default-ceiling sample:
+
+- [Windows clean-commit evidence](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/benchmark-results/2026-08-02-windows-clean-228f952.md)
+
+The default-ceiling caller-String median was 2.14 ms for Weavatrix and 5.44 ms
+for Mago. The conservative fastest-competitor-p25 / Weavatrix-p75 gate passed
+at 2.24x. The full matrix remains deliberately mixed and is not a universal 2x
+claim: rust-analyzer was about 9% faster for equal-length caller-String replay,
+while Weavatrix was 2.16x faster for the equivalent caller-Vec output.
 
 This file defines the conditions that must be met before a result is added to
 the README or release notes.

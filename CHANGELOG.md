@@ -16,6 +16,8 @@
 - Reduced common prepared metadata size with lazily allocated merged provenance.
 - Expanded the pinned competitor harness with correctness-gated caller-buffer,
   reversed-input, default-limit, and custom-limit stress workloads.
+- Recorded clean-commit competitor evidence: the conservative default-ceiling
+  caller-String gate passed at 2.24x versus the fastest competitor tail.
 - Corrected installation instructions to use the published crates.io package.
 - Added crates.io and docs.rs release links and badges.
 - Added a secret-backed, manually dispatched GitHub publication workflow.

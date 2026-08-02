@@ -24,6 +24,8 @@ pub(crate) enum Phase {
     BatchApply,
     Prepare,
     Prepared,
+    Reused,
+    ReusedBytes,
     Chunks,
     WriteTo,
 }
@@ -34,8 +36,10 @@ impl Phase {
             Self::BatchApply => "batch+apply",
             Self::Prepare => "prepare",
             Self::Prepared => "prepared-apply",
+            Self::Reused => "caller-buffer replay",
+            Self::ReusedBytes => "caller-Vec replay",
             Self::Chunks => "chunks (WV-only)",
-            Self::WriteTo => "write-to-Vec (WV-only)",
+            Self::WriteTo => "write-to-reused-Vec (WV-only)",
         }
     }
 }
@@ -52,7 +56,7 @@ impl Task {
     }
 }
 
-pub(crate) const TASKS: [Task; 12] = [
+pub(crate) const TASKS: [Task; 18] = [
     Task::new(Phase::BatchApply, Engine::Weavatrix),
     Task::new(Phase::BatchApply, Engine::Mago),
     Task::new(Phase::BatchApply, Engine::RustAnalyzer),
@@ -63,6 +67,12 @@ pub(crate) const TASKS: [Task; 12] = [
     Task::new(Phase::Prepared, Engine::Weavatrix),
     Task::new(Phase::Prepared, Engine::Mago),
     Task::new(Phase::Prepared, Engine::RustAnalyzer),
+    Task::new(Phase::Reused, Engine::Weavatrix),
+    Task::new(Phase::Reused, Engine::Mago),
+    Task::new(Phase::Reused, Engine::RustAnalyzer),
+    Task::new(Phase::ReusedBytes, Engine::Weavatrix),
+    Task::new(Phase::ReusedBytes, Engine::Mago),
+    Task::new(Phase::ReusedBytes, Engine::RustAnalyzer),
     Task::new(Phase::Chunks, Engine::Weavatrix),
     Task::new(Phase::WriteTo, Engine::Weavatrix),
 ];

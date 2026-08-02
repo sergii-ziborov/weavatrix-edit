@@ -47,7 +47,7 @@ be rechecked before publishing a later comparison.
 | Forward offset mapping | Yes, with boundary bias | No dedicated API | Yes | No | Position/offset conversion, not edit projection |
 | Bounded original-source admission | Yes | Incremental and batch admission, but no hard budgets | Builder stages trusted edits without source validation | No | No |
 | Sequential current-document session | No; separate future layer | No; every offset addresses the original source | No | No | Yes; later changes address already-modified text |
-| Streaming result | Borrowed chunks and caller-owned `Write` | No | No | No | No |
+| Streaming/reusable result | Caller-owned `String`/`Vec<u8>`, explicit retained rendered view, borrowed chunks, and caller-owned `Write` | No caller-buffer API | Mutates a caller `String`, but requires restoring the source before replay | No | No |
 | Structured normalized preview | Exact source/output ranges, borrowed text, provenance, and byte statistics | No dedicated API | Builder/plan inspection without source proof | No dedicated API | Document updates, not immutable-plan preview |
 | Arbitrary binary source | No; strict UTF-8 source | Yes | No | No | No |
 | Hard source/edit/output budgets | Yes | No | No | No | No |

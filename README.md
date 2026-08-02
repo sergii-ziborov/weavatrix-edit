@@ -35,8 +35,8 @@ either be returned in memory or streamed to a caller-owned `std::io::Write`.
 - allocation-free normalized change inspection with exact source/output ranges,
   retained provenance, and aggregate byte statistics;
 - bounded multi-error diagnostics with structured, truncated mismatch evidence;
-- zero-copy output chunks and a caller-owned writer adapter without allocating
-  a final `String`;
+- allocation-reusing caller-owned `String` and `Vec<u8>` output, zero-copy
+  chunks, and a caller-owned writer adapter;
 - an optional caller-supplied validator over the complete result;
 - Serde models for the extensible `weavatrix.edit-plan.v1` envelope.
 
@@ -103,7 +103,8 @@ whole set before constructing output, so earlier edits never shift later ones.
 | `prepare_edits`, `prepare_byte_edits` | Bind validated edits to an immutable source for reuse or composition |
 | `prepare_byte_edits_owned` | Consume a native byte batch and move replacements into the prepared plan |
 | `ByteEditBatch` | Incrementally admit bounded original-source edits; batch admission is transactional |
-| `PreparedEdits` | Apply, inspect normalized changes and statistics, stream to `Write`, union plans, and map offsets |
+| `PreparedEdits` | Apply into a new or reusable output, opt into a retained rendered view, inspect changes/statistics, stream to `Write`, union plans, and map offsets |
+| `ApplySummary` | Exact edit and byte totals returned by caller-buffer application |
 | `PreparedChange`, `ChangeSummary` | Exact source/output preview ranges, before/after slices, provenance, and aggregate byte totals |
 | `EditChunks` | Sink-independent zero-copy iteration for sync or async consumers |
 | `WriteSummary` | Successful streamed-output counts without retaining the complete result |
@@ -117,6 +118,38 @@ whole set before constructing output, so earlier edits never shift later ones.
 
 `PreparedEdits::bytes_before` and `bytes_after` expose exact preflight sizes so
 a transaction layer can enforce an aggregate multi-file budget before writing.
+
+Hot replay loops can retain their output allocation. `apply_into` refills a
+caller-owned `String`; `apply_into_bytes` writes the same guaranteed-valid UTF-8
+bytes directly into a caller-owned `Vec<u8>` for files, hashes, or sockets:
+
+```rust
+use weavatrix_edit::{ByteEdit, Provenance, prepare_byte_edits};
+
+let prepared = prepare_byte_edits(
+    "let answer = 41;",
+    &[ByteEdit::replace(13..15, "41", "42", Provenance::EXACT_LSP)],
+)?;
+let mut output = String::with_capacity(prepared.bytes_after());
+let summary = prepared.apply_into(&mut output);
+assert_eq!(output, "let answer = 42;");
+assert_eq!(summary.edits_applied, 1);
+# Ok::<(), weavatrix_edit::EditError>(())
+```
+
+Ordinary `apply`, `apply_into`, `apply_into_bytes`, `chunks`, and `write_to`
+do not retain a second output-sized allocation. A hot read/replay loop can
+explicitly call `rendered_text()` once to retain the complete result and borrow
+it without copying; later `apply*` calls copy that contiguous materialization.
+`has_rendered_text()` exposes the memory state and `clear_rendered_text()`
+releases it. Cloning a plan does not clone the retained output, and `union`
+always invalidates it. Prefer `chunks()` or `write_to()` when bounded streaming
+memory matters more than repeated access latency.
+
+Prepared execution metadata can additionally coalesce consecutive insertions
+at one source offset while preserving their individual preview ranges, order,
+and provenance. The duplicated insertion text has one hard 64 KiB ceiling per
+plan; runs beyond that global budget use the ordinary non-coalesced path.
 
 `PreparedEdits::apply_with_validator` is useful for callers that must reject
 the complete output unless it remains parseable or satisfies a domain-specific
@@ -289,21 +322,32 @@ This is a capability comparison, not a speed ranking. See
 
 ## Performance evidence
 
-No public competitor performance result is claimed for version 0.1.2. The
-repository contains a native smoke benchmark and a separate output-equivalent
-byte-edit harness for Mago, rust-analyzer, and typst-edit. A ranking will be
-published only after the harness, environment, and raw samples are recorded and
-the compared operations are labelled by their actual validation contract.
+The pinned, output-gated harness includes Mago Text Edit 1.45.0,
+`ra_ap_text_edit` 0.0.241, and typst-edit 0.1.0. Every final output is checked
+byte-for-byte before timing, and the optional rendered-output cache is asserted
+to remain cold for the primary rows. Caller-`String` and caller-`Vec` results
+are reported separately because the adapters required by Mago and
+rust-analyzer differ; allocating prepared and admission rows are report-only.
 
-The required method and benchmark matrix are in
-[docs/benchmarks.md](docs/benchmarks.md).
+The clean `228f952` release run measured the default-limit 10 MiB / 2,000-edit
+caller-`String` replay at 2.14 ms versus Mago's 5.44 ms (2.54x by median). The
+predeclared conservative gate uses fastest-competitor p25 divided by Weavatrix
+p75 and passed at 2.24x. In the complete matrix, Weavatrix beat Mago on every
+caller-owned String and Vec workload.
+
+No universal 2x claim is made. Equal-length caller-`String` replay shares a
+full-copy memory floor with rust-analyzer, which was about 9% faster on that
+one recorded row; Weavatrix's direct caller-Vec path was 2.16x faster there.
+See [the benchmark contract](docs/benchmarks.md) and the
+[exact clean-commit environment, matrix, and raw samples](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/benchmark-results/2026-08-02-windows-clean-228f952.md).
 
 ## Limitations
 
 - Input is valid UTF-8 Rust `str`; arbitrary binary data and non-UTF-8 source
   decoding are outside the crate.
-- Application produces a contiguous `String`; it is not a persistent rope and
-  does not optimize a sequence of interactive editor keystrokes.
+- Application produces contiguous UTF-8 in a new or caller-owned `String` or
+  `Vec<u8>`; it is not a persistent rope and does not optimize a sequence of
+  interactive editor keystrokes.
 - Multi-file plans are validated here, but applying them transactionally is a
   worktree-layer responsibility.
 - `PreparedEdits::write_to` validates the complete edit set before the first

@@ -1,4 +1,4 @@
-use crate::error::{ByteSpan, DiagnosticLimits, EditError};
+use crate::error::EditError;
 
 use super::{
     AppliedText, PreparedEdit, PreparedEdits, ProvenanceSet,
@@ -64,19 +64,12 @@ fn validate_candidates(
     candidates: &mut [Candidate<'_>],
     max_output_bytes: usize,
 ) -> Result<usize, EditError> {
-    for candidate in candidates.iter() {
-        let actual = &source[candidate.start..candidate.end];
-        if actual != candidate.before {
-            return Err(EditError::before_mismatch(
-                ByteSpan::new(candidate.start, candidate.end),
-                candidate.before,
-                actual,
-                DiagnosticLimits::default(),
-            )
-            .at_edit(candidate.order));
-        }
+    if !candidates
+        .windows(2)
+        .all(|pair| candidate_order(&pair[0], &pair[1]).is_le())
+    {
+        candidates.sort_unstable_by(candidate_order);
     }
-    candidates.sort_unstable_by(candidate_order);
     verify_ranges(
         candidates
             .iter()

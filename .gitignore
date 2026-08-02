@@ -1,6 +1,5 @@
 /target/
 /tools/competitor-bench/target/
-/benchmark-results/
 *.tmp
 *.swp
 .DS_Store

@@ -24,7 +24,8 @@ pub use prepare::{
     prepare_edits_with_encoding_and_limits, prepare_edits_with_limits,
 };
 pub use prepared::{
-    AppliedText, ChangeSummary, OffsetBias, PreparedChange, PreparedChanges, PreparedEdits,
+    AppliedText, ApplySummary, ChangeSummary, OffsetBias, PreparedChange, PreparedChanges,
+    PreparedEdits,
 };
 pub use stream::EditChunks;
 pub use writer::WriteSummary;
@@ -39,28 +40,48 @@ struct PreparedEdit {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct InsertRun {
+    first_edit: usize,
+    past_last_edit: usize,
+    start: usize,
+    after: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ProvenanceSet {
     primary: Provenance,
-    additional: Vec<Provenance>,
+    // Most edits have exactly one provenance. Keep that common case to one
+    // pointer instead of embedding an empty three-word Vec in every prepared
+    // edit; storage is allocated only when `union` actually merges evidence.
+    additional: Option<Box<[Provenance]>>,
 }
 
 impl ProvenanceSet {
     fn new(primary: Provenance) -> Self {
         Self {
             primary,
-            additional: Vec::new(),
+            additional: None,
         }
     }
 
-    fn contains(&self, candidate: &Provenance) -> bool {
-        self.primary == *candidate || self.additional.contains(candidate)
+    fn additional(&self) -> &[Provenance] {
+        self.additional.as_deref().unwrap_or(&[])
     }
 
     fn extend(&mut self, other: Self) {
-        for provenance in core::iter::once(other.primary).chain(other.additional) {
-            if !self.contains(&provenance) {
-                self.additional.push(provenance);
+        let mut retained = self
+            .additional
+            .take()
+            .map_or_else(Vec::new, <[Provenance]>::into_vec);
+        for provenance in
+            core::iter::once(other.primary).chain(other.additional.into_iter().flatten())
+        {
+            if self.primary != provenance && !retained.contains(&provenance) {
+                retained.push(provenance);
             }
+        }
+        if !retained.is_empty() {
+            self.additional = Some(retained.into_boxed_slice());
         }
     }
 }

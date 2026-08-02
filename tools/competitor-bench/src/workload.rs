@@ -19,6 +19,12 @@ pub(crate) struct Workload {
 }
 
 impl Workload {
+    pub(crate) fn reversed(mut self, name: &'static str) -> Self {
+        self.name = name;
+        self.edits.reverse();
+        self
+    }
+
     pub(crate) fn sparse_mixed(
         name: &'static str,
         source_bytes: usize,

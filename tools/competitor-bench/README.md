@@ -22,6 +22,12 @@ cargo run --release --manifest-path tools/competitor-bench/Cargo.toml
 ```
 
 Append `-- --raw` to print every normalized sample in nanoseconds per operation.
+Use `-- --filter "default ceiling"` to run only workload names containing that
+substring while iterating on the harness.
+Append `--require-reused-string-2x` to make that default-ceiling run exit nonzero
+unless the fastest competitor's p25 divided by Weavatrix's p75 is at least 2x
+for caller-`String` replay. This conservative gate is stricter than comparing
+medians and tolerates neither a slow Weavatrix tail nor a fast competitor tail.
 
 The harness verifies every one-shot and prepared result against an independent
 reference splicer before timing. This includes the declared order of many
@@ -38,24 +44,48 @@ The phases are deliberately separate:
 - `prepare` creates a reusable native edit object without producing output;
 - `prepared-apply` replays that object against the same immutable source.
 
-Absolute timings are shown for every engine, but a cross-engine ratio is shown
-only for `prepared-apply`. Valid-output parity does not make admission contracts
+Absolute timings are shown for every engine. Cross-engine ratios are shown only
+for the two caller-buffer replay phases, whose observable final output type is
+equivalent. The allocating `prepared-apply` row is report-only because Mago
+natively returns `Vec<u8>`, while Weavatrix and rust-analyzer return `String`.
+Valid-output parity does not make admission contracts
 equivalent: Weavatrix checks mandatory `before` evidence and hard budgets, Mago
 has no per-range `before` proof, rust-analyzer does not validate the source, and
 typst-edit performs its own strict string-boundary validation.
 
-Output-producing `batch+apply`, `prepared-apply`, and `write_to` rows report
-output MiB/s. `prepare` reports edits/s because the engines do not all scan the
-complete source.
+Output-producing `batch+apply`, `prepared-apply`, both caller-buffer phases, and
+`write_to` rows report output MiB/s. `prepare` reports edits/s because the
+engines do not all scan the complete source.
+
+The caller-String phase produces the same final reusable `String` for all three
+prepared engines. Weavatrix uses native `PreparedEdits::apply_into`; Mago must
+clone and finish its consuming prepared editor, validate its arbitrary bytes as
+complete UTF-8, and copy into the caller buffer; rust-analyzer restores the
+original source into the caller buffer and then mutates it with its prepared
+edit. Those adapter costs are required by the respective public APIs and remain
+inside the timer. This phase is distinct from, and never substituted for, the
+allocating prepared-apply row.
+
+The caller-`Vec` phase similarly leaves the complete output bytes in one
+preallocated `Vec<u8>`. Weavatrix uses native `apply_into_bytes`; Mago finishes
+its consuming prepared editor and copies those bytes; rust-analyzer restores and
+edits its required `String` before copying the final bytes. All required work is
+inside the timer, and every final byte buffer is correctness-gated.
+
+Weavatrix's optional retained `rendered_text` remains uninitialized during all
+primary phases, and the correctness gate asserts that invariant. A warm-output
+copy benchmark would need to retain the already-verified output for every
+engine and would be a separate state, not a prepared-apply result.
 
 Two rows are explicitly Weavatrix-only: zero-copy `chunks` traversal and
-`write_to` into a preallocated `Vec<u8>`. They have no competitor ratio. The
-chunk traversal only observes borrowed chunk lengths, so it does not report
-byte throughput.
+`write_to` into one cleared and reused preallocated `Vec<u8>`. They have no competitor ratio. The
+chunk traversal only observes borrowed chunk lengths, so it does not report byte
+throughput.
 
 Typst has no reusable prepared-plan API and is therefore shown only under
 `batch+apply`. The matrix contains sparse mixed edits, replacement-only edits,
-and 1,000 ordered insertions at the same offset.
+1,000 ordered insertions at the same offset, and a deterministic reversed-input
+case that exercises every engine's unsorted admission path.
 
 For one-shot and prepare operations, cloning an already-native input collection
 needed only to repeat a consuming API happens before the timer. Mago's `finish`

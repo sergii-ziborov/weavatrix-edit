@@ -1,7 +1,7 @@
-use crate::error::{EditError, ErrorCode};
+use crate::error::{ByteSpan, DiagnosticLimits, EditError};
 
 use super::{
-    AppliedText, PreparedEdit, PreparedEdits,
+    AppliedText, PreparedEdit, PreparedEdits, ProvenanceSet,
     prepare::Candidate,
     ranges::{empty_rank, output_size, verify_ranges},
 };
@@ -20,6 +20,7 @@ pub(super) fn finish_prepare<'source>(
             end: candidate.end,
             order: candidate.order,
             after: candidate.after.to_owned(),
+            provenance: ProvenanceSet::new(candidate.provenance.clone()),
         })
         .collect();
     Ok(PreparedEdits::from_validated_parts(
@@ -66,9 +67,11 @@ fn validate_candidates(
     for candidate in candidates.iter() {
         let actual = &source[candidate.start..candidate.end];
         if actual != candidate.before {
-            return Err(EditError::new(
-                ErrorCode::BeforeMismatch,
-                format!("expected {:?}, found {actual:?}", candidate.before),
+            return Err(EditError::before_mismatch(
+                ByteSpan::new(candidate.start, candidate.end),
+                candidate.before,
+                actual,
+                DiagnosticLimits::default(),
             )
             .at_edit(candidate.order));
         }

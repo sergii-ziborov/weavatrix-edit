@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, ops::Bound::Excluded};
 
 use crate::{
-    error::{EditError, ErrorCode},
+    error::{ByteSpan, DiagnosticLimits, EditError, ErrorCode},
     limits::BatchLimits,
     model::ByteEdit,
 };
 
-use super::{PreparedEdit, ranges::compare_prepared};
+use super::{PreparedEdit, ProvenanceSet, ranges::compare_prepared};
 
 #[derive(Debug)]
 pub(super) struct Occupancy {
@@ -69,9 +69,11 @@ pub(super) fn validate_before(
     if actual == edit.before {
         return Ok(());
     }
-    Err(EditError::new(
-        ErrorCode::BeforeMismatch,
-        format!("expected {:?}, found {actual:?}", edit.before),
+    Err(EditError::before_mismatch(
+        ByteSpan::new(edit.start, edit.end),
+        &edit.before,
+        actual,
+        DiagnosticLimits::default(),
     )
     .at_edit(order))
 }
@@ -235,6 +237,7 @@ pub(super) fn into_prepared(
         end: edit.end,
         order,
         after: edit.after,
+        provenance: ProvenanceSet::new(edit.provenance),
     }
 }
 

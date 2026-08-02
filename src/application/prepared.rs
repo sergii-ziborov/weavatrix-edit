@@ -1,7 +1,10 @@
 use crate::error::{EditError, ErrorCode};
+use crate::model::Provenance;
+
+use core::ops::Range;
 
 use super::{
-    PreparedEdit,
+    PreparedEdit, ProvenanceSet,
     ranges::{prepared_output_size, sort_prepared, verify_ranges},
     stream::EditChunks,
     writer::{WriteSummary, write_prepared},
@@ -21,6 +24,82 @@ pub struct AppliedText {
 pub enum OffsetBias {
     Left,
     Right,
+}
+
+/// One normalized edit with exact source and resulting byte ranges.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedChange<'change> {
+    pub source_range: Range<usize>,
+    pub output_range: Range<usize>,
+    pub before: &'change str,
+    pub after: &'change str,
+    pub input_order: usize,
+    provenance: &'change ProvenanceSet,
+}
+
+impl PreparedChange<'_> {
+    /// Primary provenance retained from the first equivalent prepared edit.
+    #[must_use]
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance.primary
+    }
+
+    /// Every distinct provenance retained across equivalent unioned edits.
+    pub fn provenances(&self) -> impl Iterator<Item = &Provenance> {
+        core::iter::once(&self.provenance.primary).chain(self.provenance.additional.iter())
+    }
+
+    #[must_use]
+    pub fn provenance_count(&self) -> usize {
+        1 + self.provenance.additional.len()
+    }
+}
+
+/// Allocation-free iterator over normalized prepared changes.
+#[derive(Clone, Debug)]
+pub struct PreparedChanges<'change> {
+    source: &'change str,
+    edits: core::slice::Iter<'change, PreparedEdit>,
+    source_cursor: usize,
+    output_cursor: usize,
+}
+
+impl<'change> Iterator for PreparedChanges<'change> {
+    type Item = PreparedChange<'change>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let edit = self.edits.next()?;
+        let unchanged = edit.start - self.source_cursor;
+        let output_start = self.output_cursor + unchanged;
+        let output_end = output_start + edit.after.len();
+        self.source_cursor = self.source_cursor.max(edit.end);
+        self.output_cursor = output_end;
+        Some(PreparedChange {
+            source_range: edit.start..edit.end,
+            output_range: output_start..output_end,
+            before: &self.source[edit.start..edit.end],
+            after: &edit.after,
+            input_order: edit.order,
+            provenance: &edit.provenance,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.edits.size_hint()
+    }
+}
+
+impl ExactSizeIterator for PreparedChanges<'_> {}
+impl core::iter::FusedIterator for PreparedChanges<'_> {}
+
+/// Exact aggregate sizes for a prepared change set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChangeSummary {
+    pub edits: usize,
+    pub bytes_before: usize,
+    pub bytes_after: usize,
+    pub removed_bytes: usize,
+    pub inserted_bytes: usize,
 }
 
 /// Validated, sorted byte edits bound to one immutable source revision.
@@ -84,6 +163,36 @@ impl<'source> PreparedEdits<'source> {
         EditChunks::new(self.source, &self.edits)
     }
 
+    /// Iterates exact normalized changes without constructing output or a diff.
+    ///
+    /// Source and output ranges are UTF-8 byte ranges. Multiple inserts at one
+    /// source offset retain deterministic input order and receive consecutive
+    /// output ranges. Identical replacements merged by [`Self::union`] retain
+    /// every distinct provenance label.
+    #[must_use]
+    pub fn changes(&self) -> PreparedChanges<'_> {
+        PreparedChanges {
+            source: self.source,
+            edits: self.edits.iter(),
+            source_cursor: 0,
+            output_cursor: 0,
+        }
+    }
+
+    /// Returns exact edit and byte totals without applying or allocating output.
+    #[must_use]
+    pub fn change_summary(&self) -> ChangeSummary {
+        let removed_bytes = self.edits.iter().map(|edit| edit.end - edit.start).sum();
+        let inserted_bytes = self.edits.iter().map(|edit| edit.after.len()).sum();
+        ChangeSummary {
+            edits: self.edits.len(),
+            bytes_before: self.source.len(),
+            bytes_after: self.output_size,
+            removed_bytes,
+            inserted_bytes,
+        }
+    }
+
     /// Writes the already-validated result without allocating an output [`String`].
     ///
     /// Edit validation is atomic: construction of this value completed before the
@@ -142,18 +251,24 @@ impl<'source> PreparedEdits<'source> {
                     EditError::new(ErrorCode::PlanTooLarge, "merged edit order overflow")
                 })
             })?;
-        for (offset, edit) in other.edits.iter_mut().enumerate() {
-            edit.order = order_base.checked_add(offset).ok_or_else(|| {
+        for edit in &mut other.edits {
+            edit.order = order_base.checked_add(edit.order).ok_or_else(|| {
                 EditError::new(ErrorCode::PlanTooLarge, "merged edit order overflow")
             })?;
         }
         self.edits.extend(other.edits);
         sort_prepared(&mut self.edits);
         self.edits.dedup_by(|right, left| {
-            left.start != left.end
+            let identical = left.start != left.end
                 && left.start == right.start
                 && left.end == right.end
-                && left.after == right.after
+                && left.after == right.after;
+            if identical {
+                let placeholder = ProvenanceSet::new(right.provenance.primary.clone());
+                let other = core::mem::replace(&mut right.provenance, placeholder);
+                left.provenance.extend(other);
+            }
+            identical
         });
         if self.edits.len() > self.max_edits {
             return Err(EditError::new(

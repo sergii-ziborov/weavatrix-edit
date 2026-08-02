@@ -1,7 +1,10 @@
 use crate::{
     error::{EditError, ErrorCode},
+    limits::LineIndexLimits,
     model::{Position, PositionEncoding},
 };
+
+use core::mem::size_of;
 
 /// Reusable line index for strict Weavatrix v1 UTF-16 positions.
 #[derive(Clone, Debug)]
@@ -11,12 +14,45 @@ pub struct LineIndex<'text> {
 }
 
 impl<'text> LineIndex<'text> {
+    /// Builds a reusable full line index.
+    ///
+    /// This compatibility constructor retains its infallible signature. Code
+    /// handling untrusted or very large text should use [`Self::try_new`] with
+    /// explicit resource ceilings instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the complete line-start table cannot be represented or
+    /// allocated. Use [`Self::try_new`] to receive a bounded error instead.
     #[must_use]
     pub fn new(text: &'text str) -> Self {
-        let mut starts = Vec::with_capacity(text.bytes().filter(|byte| *byte == b'\n').count() + 1);
+        Self::try_new(
+            text,
+            LineIndexLimits {
+                max_lines: usize::MAX,
+                max_index_bytes: usize::MAX,
+            },
+        )
+        .unwrap_or_else(|error| panic!("failed to build line index: {error}"))
+    }
+
+    /// Builds a reusable full line index within explicit resource limits.
+    ///
+    /// The source is borrowed rather than copied. The complete line-start table
+    /// is counted before allocation, checked against both limits, and reserved
+    /// fallibly so hostile newline-heavy input returns an error instead of
+    /// relying on an allocator panic.
+    pub fn try_new(text: &'text str, limits: LineIndexLimits) -> Result<Self, EditError> {
+        let line_count = count_lines(text, limits.max_lines)?;
+        check_index_bytes::<usize>(line_count, limits.max_index_bytes)?;
+
+        let mut starts = Vec::new();
+        starts
+            .try_reserve_exact(line_count)
+            .map_err(|_| index_allocation_error())?;
         starts.push(0);
         starts.extend(text.match_indices('\n').map(|(offset, _)| offset + 1));
-        Self { text, starts }
+        Ok(Self { text, starts })
     }
 
     /// Resolves a 1-based line and 0-based UTF-16 code-unit position.
@@ -81,6 +117,173 @@ impl<'text> LineIndex<'text> {
     pub fn line_count(&self) -> usize {
         self.starts.len()
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SparseLine {
+    line: u32,
+    start: usize,
+    end: usize,
+    found: bool,
+}
+
+/// A one-shot position resolver whose allocation is proportional to requested
+/// edit lines rather than the source's total line count.
+pub(crate) struct SparseLineIndex<'text> {
+    text: &'text str,
+    lines: Vec<SparseLine>,
+}
+
+impl<'text> SparseLineIndex<'text> {
+    pub(crate) fn try_for_line_pairs(
+        text: &'text str,
+        requested_line_pairs: impl ExactSizeIterator<Item = (u32, u32)>,
+    ) -> Result<Self, EditError> {
+        let requested_capacity = requested_line_pairs
+            .len()
+            .checked_mul(2)
+            .ok_or_else(index_byte_limit_error)?;
+        let max_index_bytes = requested_capacity
+            .checked_mul(size_of::<SparseLine>())
+            .ok_or_else(index_byte_limit_error)?;
+        check_index_bytes::<SparseLine>(requested_capacity, max_index_bytes)?;
+        let max_lines = text.len().checked_add(1).ok_or_else(line_limit_error)?;
+
+        let mut lines = Vec::new();
+        lines
+            .try_reserve_exact(requested_capacity)
+            .map_err(|_| index_allocation_error())?;
+        for (start_line, end_line) in requested_line_pairs {
+            for line in [start_line, end_line] {
+                lines.push(SparseLine {
+                    line,
+                    start: 0,
+                    end: 0,
+                    found: false,
+                });
+            }
+        }
+        lines.sort_unstable_by_key(|entry| entry.line);
+        lines.dedup_by_key(|entry| entry.line);
+
+        let mut current_line = 1_usize;
+        if current_line > max_lines {
+            return Err(line_limit_error());
+        }
+        let mut line_start = 0_usize;
+        let mut requested = 0_usize;
+
+        for (offset, byte) in text.bytes().enumerate() {
+            if byte != b'\n' {
+                continue;
+            }
+            fill_sparse_line(&mut lines, &mut requested, current_line, line_start, offset);
+            current_line = current_line.checked_add(1).ok_or_else(line_limit_error)?;
+            if current_line > max_lines {
+                return Err(line_limit_error());
+            }
+            line_start = offset + 1;
+        }
+        fill_sparse_line(
+            &mut lines,
+            &mut requested,
+            current_line,
+            line_start,
+            text.len(),
+        );
+
+        Ok(Self { text, lines })
+    }
+
+    pub(crate) fn byte_offset_with_encoding(
+        &self,
+        position: Position,
+        encoding: PositionEncoding,
+    ) -> Result<usize, EditError> {
+        if position.line == 0 {
+            return Err(position_error(position, "line numbers are 1-based"));
+        }
+        let Ok(index) = self
+            .lines
+            .binary_search_by_key(&position.line, |entry| entry.line)
+        else {
+            return Err(position_error(position, "line was not indexed"));
+        };
+        let line = self.lines[index];
+        if !line.found {
+            return Err(position_error(position, "line exceeds file line count"));
+        }
+        resolve_character(
+            &self.text[line.start..line.end],
+            line.start,
+            position,
+            encoding,
+        )
+    }
+}
+
+fn fill_sparse_line(
+    lines: &mut [SparseLine],
+    requested: &mut usize,
+    current_line: usize,
+    start: usize,
+    end: usize,
+) {
+    while let Some(entry) = lines.get_mut(*requested) {
+        let Ok(requested_line) = usize::try_from(entry.line) else {
+            break;
+        };
+        if requested_line > current_line {
+            break;
+        }
+        if requested_line == current_line {
+            entry.start = start;
+            entry.end = end;
+            entry.found = true;
+        }
+        *requested += 1;
+    }
+}
+
+fn count_lines(text: &str, max_lines: usize) -> Result<usize, EditError> {
+    let mut lines = 1_usize;
+    if lines > max_lines {
+        return Err(line_limit_error());
+    }
+    for byte in text.bytes() {
+        if byte == b'\n' {
+            lines = lines.checked_add(1).ok_or_else(line_limit_error)?;
+            if lines > max_lines {
+                return Err(line_limit_error());
+            }
+        }
+    }
+    Ok(lines)
+}
+
+fn check_index_bytes<Entry>(entries: usize, max_index_bytes: usize) -> Result<(), EditError> {
+    let Some(index_bytes) = entries.checked_mul(size_of::<Entry>()) else {
+        return Err(index_byte_limit_error());
+    };
+    if index_bytes > max_index_bytes {
+        return Err(index_byte_limit_error());
+    }
+    Ok(())
+}
+
+fn line_limit_error() -> EditError {
+    EditError::new(ErrorCode::PlanTooLarge, "line count exceeds index limits")
+}
+
+fn index_byte_limit_error() -> EditError {
+    EditError::new(ErrorCode::PlanTooLarge, "line index exceeds its byte limit")
+}
+
+fn index_allocation_error() -> EditError {
+    EditError::new(
+        ErrorCode::PlanTooLarge,
+        "line index allocation could not be reserved",
+    )
 }
 
 fn resolve_character(

@@ -38,6 +38,26 @@ impl Default for ApplyLimits {
     }
 }
 
+/// Resource limits for building a reusable full [`crate::LineIndex`].
+///
+/// The byte ceiling covers the line-start offset table, not the borrowed source
+/// text. Position-based one-shot application uses a separate sparse index
+/// bounded by the existing [`ApplyLimits::max_edits`] ceiling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LineIndexLimits {
+    pub max_lines: usize,
+    pub max_index_bytes: usize,
+}
+
+impl Default for LineIndexLimits {
+    fn default() -> Self {
+        Self {
+            max_lines: 1_000_000,
+            max_index_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+
 /// Hard resource limits for incrementally building one original-source batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BatchLimits {

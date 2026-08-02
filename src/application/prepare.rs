@@ -1,8 +1,8 @@
 use crate::{
-    coordinates::LineIndex,
+    coordinates::SparseLineIndex,
     error::{EditError, ErrorCode},
     limits::ApplyLimits,
-    model::{ByteEdit, Position, PositionEncoding, TextEdit},
+    model::{ByteEdit, Position, PositionEncoding, Provenance, TextEdit},
     validation::validate_text_edit,
 };
 
@@ -18,6 +18,7 @@ pub(super) struct Candidate<'edit> {
     pub(super) order: usize,
     pub(super) before: &'edit str,
     pub(super) after: &'edit str,
+    pub(super) provenance: &'edit Provenance,
 }
 
 /// Validates and applies v1 UTF-16 edits atomically in memory.
@@ -118,7 +119,8 @@ fn position_candidates<'edit>(
     limits: ApplyLimits,
 ) -> Result<Vec<Candidate<'edit>>, EditError> {
     validate_size(source, edits.len(), limits)?;
-    let lines = LineIndex::new(source);
+    let requested_line_pairs = edits.iter().map(|edit| (edit.start_line, edit.end_line));
+    let lines = SparseLineIndex::try_for_line_pairs(source, requested_line_pairs)?;
     let mut candidates = Vec::with_capacity(edits.len());
     for (order, edit) in edits.iter().enumerate() {
         validate_text_edit(edit, order)?;
@@ -134,6 +136,7 @@ fn position_candidates<'edit>(
             order,
             before: &edit.before,
             after: &edit.after,
+            provenance: &edit.provenance,
         });
     }
     Ok(candidates)
@@ -177,6 +180,7 @@ fn byte_candidates<'edit>(
             order,
             before: &edit.before,
             after: &edit.after,
+            provenance: &edit.provenance,
         });
     }
     Ok(candidates)

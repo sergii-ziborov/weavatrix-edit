@@ -1,11 +1,11 @@
 use crate::{
-    error::{EditError, ErrorCode},
+    error::{ByteSpan, DiagnosticLimits, EditError},
     limits::ApplyLimits,
     model::ByteEdit,
 };
 
 use super::{
-    PreparedEdit, PreparedEdits,
+    PreparedEdit, PreparedEdits, ProvenanceSet,
     prepare::{validate_byte_edit, validate_size},
     ranges::{prepared_output_size, sort_prepared, verify_ranges},
 };
@@ -32,9 +32,11 @@ pub fn prepare_byte_edits_owned_with_limits(
         let actual = &source_bytes[edit.start..edit.end];
         if actual != edit.before.as_bytes() {
             let actual = &source[edit.start..edit.end];
-            return Err(EditError::new(
-                ErrorCode::BeforeMismatch,
-                format!("expected {:?}, found {actual:?}", edit.before),
+            return Err(EditError::before_mismatch(
+                ByteSpan::new(edit.start, edit.end),
+                &edit.before,
+                actual,
+                DiagnosticLimits::default(),
             )
             .at_edit(order));
         }
@@ -43,6 +45,7 @@ pub fn prepare_byte_edits_owned_with_limits(
             end: edit.end,
             order,
             after: edit.after,
+            provenance: ProvenanceSet::new(edit.provenance),
         });
     }
     sort_prepared(&mut prepared);

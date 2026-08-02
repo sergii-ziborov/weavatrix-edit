@@ -24,10 +24,15 @@ either be returned in memory or streamed to a caller-owned `std::io::Write`.
 - exact `before` checks, Unicode-scalar boundaries, overlap detection, and
   stable same-position insertion order;
 - bounded source, edit-count, output-size, and multi-file plan validation;
+- fallible reusable line indexing with explicit line-count and index-byte
+  ceilings;
 - bounded incremental admission of original-source byte edits with atomic
   `push_batch` rollback;
 - portable repository-relative path validation;
 - prepared edit union, source-offset invalidation, and forward offset mapping;
+- allocation-free normalized change inspection with exact source/output ranges,
+  retained provenance, and aggregate byte statistics;
+- bounded multi-error diagnostics with structured, truncated mismatch evidence;
 - zero-copy output chunks and a caller-owned writer adapter without allocating
   a final `String`;
 - an optional caller-supplied validator over the complete result;
@@ -94,13 +99,16 @@ whole set before constructing output, so earlier edits never shift later ones.
 | `prepare_edits`, `prepare_byte_edits` | Bind validated edits to an immutable source for reuse or composition |
 | `prepare_byte_edits_owned` | Consume a native byte batch and move replacements into the prepared plan |
 | `ByteEditBatch` | Incrementally admit bounded original-source edits; batch admission is transactional |
-| `PreparedEdits` | Apply in memory, iterate borrowed chunks, stream to `Write`, union plans, and map offsets |
+| `PreparedEdits` | Apply, inspect normalized changes and statistics, stream to `Write`, union plans, and map offsets |
+| `PreparedChange`, `ChangeSummary` | Exact source/output preview ranges, before/after slices, provenance, and aggregate byte totals |
 | `EditChunks` | Sink-independent zero-copy iteration for sync or async consumers |
 | `WriteSummary` | Successful streamed-output counts without retaining the complete result |
-| `LineIndex` | Strict UTF-8/UTF-16/UTF-32 position conversion in both directions |
+| `LineIndex`, `LineIndexLimits` | Strict UTF-8/UTF-16/UTF-32 position conversion, with a fallible bounded constructor |
 | `EditPlan`, `FileEdit` | Extensible multi-file `weavatrix.edit-plan.v1` wire model |
 | `validate_edit_plan` | Validate schema, paths, provenance, hashes, uniqueness, and budgets |
 | `PlanLimits`, `ApplyLimits`, `BatchLimits` | Explicit resource ceilings with conservative defaults |
+| `diagnose_edits`, `diagnose_byte_edits` | Non-mutating multi-error preflight with bounded retained diagnostics |
+| `DiagnosticLimits`, `ValidationReport` | Hard item/preview ceilings and structured exact-before mismatch evidence |
 | `EditError`, `ErrorCode` | Stable machine-readable failures plus file/edit indices |
 
 `PreparedEdits::bytes_before` and `bytes_after` expose exact preflight sizes so
@@ -160,6 +168,22 @@ assert_eq!(applied.text, "alpha- gamma");
 fallible `finish` also enforces the final output ceiling for an empty batch;
 an atomic batch may shrink a source that initially exceeds that ceiling.
 
+## Structured preview and diagnostics
+
+`PreparedEdits::changes()` exposes each normalized change without applying the
+plan or running a second diff engine. Every item contains the exact source and
+output byte ranges, borrowed `before`/`after` text, deterministic input order,
+and all provenance labels retained when identical replacements are unioned.
+`change_summary()` returns exact inserted, removed, input, and output byte
+totals without allocating the final result.
+
+`diagnose_edits` and `diagnose_byte_edits` validate the complete admitted set
+without applying it. They continue across independent position, exact-before,
+and overlap failures. `DiagnosticLimits` caps both retained item count and each
+expected/actual preview. Error messages never interpolate complete source text;
+full lengths, bounded UTF-8 previews, truncation state, and the exact source
+range are available as structured mismatch evidence.
+
 ## Parallel multi-file use
 
 `PreparedEdits` is immutable, `Send`, and `Sync`. Independent files can be
@@ -189,6 +213,20 @@ The wire v1 convention is intentionally fixed:
 coordinates for adapters, but serialized `TextEdit` values always use the UTF-16
 wire convention. See [the complete v1 contract](docs/edit-plan-v1.md).
 
+`LineIndex::new` remains the compatibility constructor for trusted, already
+bounded text. Untrusted callers should use
+`LineIndex::try_new(text, LineIndexLimits { max_lines, max_index_bytes })`.
+That API counts and validates the complete line-start table before a fallible
+`try_reserve_exact`, so a newline-heavy input returns `PLAN_TOO_LARGE` instead
+of depending on an allocator panic. `LineIndexLimits::default()` permits
+1,000,000 logical lines and 8 MiB of line-start offsets.
+
+One-shot `apply_edits*` and `prepare_edits*` calls do not construct that full
+table. They scan the bounded source once and retain at most two sparse line
+records per admitted edit before deduplication. Their index memory is therefore
+`O(max_edits)`, even when nearly every source byte is a line feed; existing
+`ApplyLimits` signatures and filesystem/worktree boundaries are unchanged.
+
 ## Guarantees
 
 For every successful single-source application:
@@ -208,7 +246,8 @@ of output per source. The default plan limits are 500 files, 2,000 edits per
 file, 1,000,000 total edits, 4,096 bytes per path, and 64 MiB of combined
 `before`/`after` text. The default staged-batch limits additionally cap
 accumulated `before` text at 16 MiB and replacement text at 64 MiB. Callers can
-provide lower limits.
+provide lower limits. A separately constructed full `LineIndex` has the
+independent `LineIndexLimits` described above.
 
 ## Wire contract
 
@@ -246,7 +285,7 @@ This is a capability comparison, not a speed ranking. See
 
 ## Performance evidence
 
-No public competitor performance result is claimed for version 0.1.0. The
+No public competitor performance result is claimed for version 0.1.1. The
 repository contains a native smoke benchmark and a separate output-equivalent
 byte-edit harness for Mago, rust-analyzer, and typst-edit. A ranking will be
 published only after the harness, environment, and raw samples are recorded and

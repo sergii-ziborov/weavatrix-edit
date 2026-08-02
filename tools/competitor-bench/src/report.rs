@@ -76,7 +76,7 @@ pub(crate) fn print_results(workload: &Workload, summaries: &[Summary], print_ra
         workload.expected_len(),
     );
     println!(
-        "| phase | engine | median | p25..p75 | p95 | p95/median | phase metric | prepared/WV time |"
+        "| phase | engine | median | p25..p75 | p95 | p95/median | phase metric | phase/WV time |"
     );
     println!("|---|---|---:|---:|---:|---:|---:|---:|");
     for summary in summaries {
@@ -95,7 +95,7 @@ fn print_summary(workload: &Workload, summaries: &[Summary], summary: &Summary) 
             candidate.task.phase == summary.task.phase && candidate.task.engine == Engine::Weavatrix
         })
         .expect("each phase has a Weavatrix measurement");
-    let relative = if summary.task.phase == Phase::Prepared {
+    let relative = if matches!(summary.task.phase, Phase::Reused | Phase::ReusedBytes) {
         format!(
             "{:.2}x",
             summary.median.as_secs_f64() / weavatrix.median.as_secs_f64()
@@ -119,7 +119,11 @@ fn print_summary(workload: &Workload, summaries: &[Summary], summary: &Summary) 
             "{:.1} edits/s",
             workload.edits.len() as f64 / summary.median.as_secs_f64()
         ),
-        Phase::BatchApply | Phase::Prepared | Phase::WriteTo => format!(
+        Phase::BatchApply
+        | Phase::Prepared
+        | Phase::Reused
+        | Phase::ReusedBytes
+        | Phase::WriteTo => format!(
             "{:.1} output MiB/s",
             workload.expected_len() as f64 / summary.median.as_secs_f64() / (MIB as f64)
         ),

@@ -13,6 +13,8 @@ impl Adapters<'_> {
             Phase::BatchApply => self.measure_batch_apply(task.engine, iterations),
             Phase::Prepare => self.measure_prepare(task.engine, iterations),
             Phase::Prepared => self.measure_prepared(task.engine, iterations),
+            Phase::Reused => self.measure_reused(task.engine, iterations),
+            Phase::ReusedBytes => self.measure_reused_bytes(task.engine, iterations),
             Phase::Chunks => self.measure_chunks(iterations),
             Phase::WriteTo => self.measure_write_to(iterations),
         };
@@ -157,14 +159,77 @@ impl Adapters<'_> {
         started.elapsed()
     }
 
-    fn measure_write_to(&self, iterations: usize) -> Duration {
-        let mut outputs = (0..iterations)
-            .map(|_| Vec::with_capacity(self.workload.expected_len()))
-            .collect::<Vec<_>>();
+    fn measure_reused_bytes(&self, engine: Engine, iterations: usize) -> Duration {
+        let capacity = self.workload.source.len().max(self.workload.expected_len());
+        let mut output = Vec::with_capacity(capacity);
+        let mut ra_work = String::with_capacity(capacity);
         let started = Instant::now();
-        for output in &mut outputs {
+        for _ in 0..iterations {
+            match engine {
+                Engine::Weavatrix => {
+                    let summary = black_box(&self.weavatrix_prepared).apply_into_bytes(&mut output);
+                    black_box(summary);
+                }
+                Engine::Mago => {
+                    let applied = black_box(&self.mago_prepared).clone().finish();
+                    output.clear();
+                    output.extend_from_slice(applied.as_ref());
+                }
+                Engine::RustAnalyzer => {
+                    ra_work.clear();
+                    ra_work.push_str(black_box(&self.workload.source));
+                    black_box(&self.ra_prepared).apply(&mut ra_work);
+                    output.clear();
+                    output.extend_from_slice(ra_work.as_bytes());
+                }
+                Engine::Typst => {
+                    unreachable!("typst-edit does not expose a reusable prepared plan")
+                }
+            }
+            black_box(output.as_slice());
+        }
+        started.elapsed()
+    }
+
+    fn measure_reused(&self, engine: Engine, iterations: usize) -> Duration {
+        let capacity = self.workload.source.len().max(self.workload.expected_len());
+        let mut output = String::with_capacity(capacity);
+        let started = Instant::now();
+        for _ in 0..iterations {
+            match engine {
+                Engine::Weavatrix => {
+                    let summary = black_box(&self.weavatrix_prepared).apply_into(&mut output);
+                    black_box(summary);
+                }
+                Engine::Mago => {
+                    let applied = black_box(&self.mago_prepared).clone().finish();
+                    output.clear();
+                    output.push_str(
+                        std::str::from_utf8(applied.as_ref())
+                            .expect("benchmark replacements are valid UTF-8"),
+                    );
+                }
+                Engine::RustAnalyzer => {
+                    output.clear();
+                    output.push_str(black_box(&self.workload.source));
+                    black_box(&self.ra_prepared).apply(&mut output);
+                }
+                Engine::Typst => {
+                    unreachable!("typst-edit does not expose a reusable prepared plan")
+                }
+            }
+            black_box(output.as_str());
+        }
+        started.elapsed()
+    }
+
+    fn measure_write_to(&self, iterations: usize) -> Duration {
+        let mut output = Vec::with_capacity(self.workload.expected_len());
+        let started = Instant::now();
+        for _ in 0..iterations {
+            output.clear();
             let summary = black_box(&self.weavatrix_prepared)
-                .write_to(output)
+                .write_to(&mut output)
                 .expect("Vec writes cannot fail");
             black_box(summary);
             black_box(output.as_slice());

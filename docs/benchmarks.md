@@ -1,10 +1,23 @@
 # Benchmark methodology
 
-No public competitor result is reported for `weavatrix-edit` 0.1.2. The current
-`edit_engine` benchmark is an internal smoke measurement. The independent
-`tools/competitor-bench` harness verifies exact byte-output parity before timing
-Mago, rust-analyzer, typst-edit, and Weavatrix, but no run is public evidence
-until its environment and raw samples are recorded.
+The independent `tools/competitor-bench` harness compares `weavatrix-edit`,
+Mago Text Edit 1.45.0, `ra_ap_text_edit` 0.0.241, and typst-edit 0.1.0. It
+verifies every final output against an independent splicer before timing.
+Results are machine-specific and contract-specific, not a universal library
+ranking.
+
+## Evidence status
+
+Timing evidence is recorded only after the implementation has a clean immutable
+commit. The source commit is benchmarked with `--raw` and the relevant release
+gate; a following evidence-only commit records the exact commit hash,
+environment, raw samples, summaries, command, and exit status. Dirty-tree
+exploratory runs are deliberately not retained here.
+
+This two-commit protocol is currently awaiting the clean implementation commit.
+No earlier raw artifact supports the new explicit output cache, bulk
+equal-length patching, capped same-offset execution runs, or fused admission
+path, so those stale measurements have been removed rather than relabelled.
 
 This file defines the conditions that must be met before a result is added to
 the README or release notes.
@@ -145,8 +158,15 @@ operation. Nearest-rank p95 and p95/median are shown only for workloads with at
 least 21 measured samples; smaller runs print `n/a` instead of presenting their
 single worst sample as p95 evidence.
 
-It reports three operations independently: valid `batch+apply`, reusable-plan
-`prepare`, and `prepared-apply`. Typst participates only in `batch+apply`
+The primary prepared and caller-buffer phases keep Weavatrix's optional
+`rendered_text` cache uninitialized; the correctness gate asserts this invariant
+before timing. A future warm-rendered-copy row must pre-render every engine's
+verified output and label that distinct state explicitly. It must not compare a
+Weavatrix cache hit against Mago `finish` or rust-analyzer edit application.
+
+It reports valid `batch+apply`, reusable-plan `prepare`, allocating
+`prepared-apply`, reusable caller-`String`, reusable caller-`Vec`, zero-copy
+chunks, and `write_to` independently. Typst participates only in `batch+apply`
 because it has no reusable plan. The workload shapes are sparse mixed edits,
 replacement-heavy edits, and same-offset insertion-heavy edits. The benchmark
 deliberately covers exact byte-range valid inputs; rejection guarantees differ,
@@ -154,8 +174,10 @@ and rust-analyzer's trusted-range/assertion contract must not be described as
 fail-closed validation.
 
 Absolute timings are reported for every engine. Cross-engine time ratios are
-reported only for prepared replay. `batch+apply` and `prepare` intentionally
-have no ratio: Weavatrix verifies mandatory `before` evidence and hard budgets,
+reported only for output-equivalent caller-buffer replay. Allocating prepared
+replay retains native output ownership and is report-only.
+`batch+apply` and `prepare` intentionally have no ratio: Weavatrix verifies
+mandatory `before` evidence and hard budgets,
 Mago has no per-range `before` proof, rust-analyzer does not validate the source,
 and typst-edit has its own strict string-boundary checks. Output parity on valid
 fixtures does not make those admission contracts equivalent.
@@ -167,7 +189,8 @@ directly. This preserves the actual reuse cost instead of moving required work
 outside the timer.
 
 The phase metric is also contract-specific. Output-producing `batch+apply`,
-`prepared-apply`, and `write_to` rows report output MiB/s. `prepare` reports
+`prepared-apply`, caller-buffer, and `write_to` rows report output MiB/s.
+`prepare` reports
 edits/s because the engines do not all scan the complete source. The `chunks`
 diagnostic only traverses borrowed chunks and observes their lengths, so it does
 not report byte throughput.
@@ -178,16 +201,20 @@ native batch. Harness-only input clones happen before timing for both engines;
 the borrowed Weavatrix prepare surface is a distinct caller-retains-input
 contract.
 
-No cross-engine sink/stream ratio is reported. The harness includes labelled
+No cross-engine generic-`Write` ratio is reported. The harness includes labelled
 Weavatrix-only diagnostics for zero-copy `chunks` traversal and `write_to` into
-a preallocated Vec. The timed competitors allocate a complete Vec/String or
-mutate a String and expose no equivalent prepared batch-to-Write API. An
-allocate-then-write adapter would measure a different contract. The harness
-also does not represent UTF-16, JSON, multi-file, or secure worktree behavior.
+a cleared, reused Vec. The caller-buffer phases are separate: all engines leave
+the same complete reusable `String` or `Vec<u8>`, and every API-required reset,
+clone, apply, and final copy remains inside the timer. The harness does not
+represent UTF-16, JSON, multi-file, or secure worktree behavior.
 
-Its terminal output is intentionally not checked in as a benchmark result.
-Publication still requires the complete environment record and raw samples
-defined above.
+The caller-`String` contract is a complete reusable Rust `String`. Mago's native
+result is `Vec<u8>`, so its required full UTF-8 validation and String copy stay
+inside that timer. The caller-`Vec` contract is a complete reusable byte vector;
+rust-analyzer natively mutates a String, so its source restoration, edit apply,
+and final byte copy all stay inside that timer. Allocating prepared rows retain
+their native output ownership and are report-only rather than a strict
+same-output-type ratio.
 
 ## Publishing results
 

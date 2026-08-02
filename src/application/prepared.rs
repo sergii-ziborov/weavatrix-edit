@@ -2,18 +2,29 @@ use crate::error::{EditError, ErrorCode};
 use crate::model::Provenance;
 
 use core::ops::Range;
+use std::sync::OnceLock;
 
 use super::{
-    PreparedEdit, ProvenanceSet,
+    InsertRun, PreparedEdit, ProvenanceSet,
     ranges::{prepared_output_size, sort_prepared, verify_ranges},
     stream::EditChunks,
     writer::{WriteSummary, write_prepared},
 };
 
+const MAX_COALESCED_INSERT_BYTES: usize = 64 * 1024;
+
 /// Successful all-or-nothing in-memory application.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppliedText {
     pub text: String,
+    pub edits_applied: usize,
+    pub bytes_before: usize,
+    pub bytes_after: usize,
+}
+
+/// Aggregate result of applying a prepared plan into caller-owned storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApplySummary {
     pub edits_applied: usize,
     pub bytes_before: usize,
     pub bytes_after: usize,
@@ -46,12 +57,12 @@ impl PreparedChange<'_> {
 
     /// Every distinct provenance retained across equivalent unioned edits.
     pub fn provenances(&self) -> impl Iterator<Item = &Provenance> {
-        core::iter::once(&self.provenance.primary).chain(self.provenance.additional.iter())
+        core::iter::once(&self.provenance.primary).chain(self.provenance.additional().iter())
     }
 
     #[must_use]
     pub fn provenance_count(&self) -> usize {
-        1 + self.provenance.additional.len()
+        1 + self.provenance.additional().len()
     }
 }
 
@@ -103,13 +114,39 @@ pub struct ChangeSummary {
 }
 
 /// Validated, sorted byte edits bound to one immutable source revision.
-#[derive(Clone, Debug)]
+///
+/// Application metadata may retain at most 64 KiB of coalesced insertion text
+/// to accelerate repeated same-offset runs while preserving every logical
+/// edit. The optional complete output cache is initialized only by
+/// [`Self::rendered_text`] and can be released with
+/// [`Self::clear_rendered_text`].
+#[derive(Debug)]
 pub struct PreparedEdits<'source> {
     source: &'source str,
     edits: Vec<PreparedEdit>,
     output_size: usize,
     max_edits: usize,
     max_output_size: usize,
+    same_size: bool,
+    insert_runs: Vec<InsertRun>,
+    rendered: OnceLock<String>,
+}
+
+impl Clone for PreparedEdits<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source,
+            edits: self.edits.clone(),
+            output_size: self.output_size,
+            max_edits: self.max_edits,
+            max_output_size: self.max_output_size,
+            same_size: self.same_size,
+            insert_runs: self.insert_runs.clone(),
+            // Materialization is a replay optimization, not part of the edit
+            // plan. Avoid unexpectedly cloning an output-sized cache.
+            rendered: OnceLock::new(),
+        }
+    }
 }
 
 impl<'source> PreparedEdits<'source> {
@@ -120,37 +157,233 @@ impl<'source> PreparedEdits<'source> {
         max_edits: usize,
         max_output_size: usize,
     ) -> Self {
+        let same_size = edits
+            .iter()
+            .all(|edit| edit.end - edit.start == edit.after.len());
+        let insert_runs = coalesce_insert_runs(&edits);
         Self {
             source,
             edits,
             output_size,
             max_edits,
             max_output_size,
+            same_size,
+            insert_runs,
+            rendered: OnceLock::new(),
         }
     }
 
     /// Applies the already-prepared edits with one output allocation.
+    ///
+    /// This does not retain an output-sized cache unless the caller explicitly
+    /// initialized one through [`Self::rendered_text`].
     #[must_use]
+    #[inline]
     pub fn apply(&self) -> AppliedText {
-        let mut text = String::with_capacity(self.output_size);
-        let mut cursor = 0_usize;
-        for edit in &self.edits {
-            if edit.start > cursor {
-                text.push_str(&self.source[cursor..edit.start]);
-                cursor = edit.start;
-            }
-            text.push_str(&edit.after);
-            if edit.end > edit.start {
-                cursor = edit.end;
-            }
-        }
-        text.push_str(&self.source[cursor..]);
+        let text = self.rendered.get().map_or_else(
+            || {
+                let mut output = String::with_capacity(self.output_size);
+                self.fill_output(&mut output);
+                output
+            },
+            Clone::clone,
+        );
         AppliedText {
             bytes_before: self.source.len(),
             bytes_after: text.len(),
             edits_applied: self.edits.len(),
             text,
         }
+    }
+
+    /// Applies into caller-owned storage, retaining its allocation for replay.
+    ///
+    /// The output is cleared only after this plan has already completed all
+    /// exact-before, Unicode-boundary, overlap, and hard-limit validation.
+    /// Reusing the same `String` therefore removes allocator traffic without
+    /// weakening the all-or-nothing admission contract. When the caller has
+    /// explicitly initialized [`Self::rendered_text`], replay becomes one
+    /// contiguous copy; otherwise this walks the normalized edit list without
+    /// retaining an output-sized cache.
+    #[inline]
+    pub fn apply_into(&self, output: &mut String) -> ApplySummary {
+        if let Some(rendered) = self.rendered.get() {
+            output.clone_from(rendered);
+        } else {
+            output.clear();
+            if output.capacity() < self.output_size {
+                output.reserve(self.output_size);
+            }
+            self.fill_output(output);
+        }
+        ApplySummary {
+            edits_applied: self.edits.len(),
+            bytes_before: self.source.len(),
+            bytes_after: output.len(),
+        }
+    }
+
+    /// Applies into a caller-owned byte buffer, retaining its allocation.
+    ///
+    /// The bytes are guaranteed to be valid UTF-8 because the source and every
+    /// replacement are validated Rust strings. This avoids a temporary
+    /// `String` when the next stage is a file, socket, hash, or byte pipeline.
+    /// When the caller has explicitly initialized [`Self::rendered_text`],
+    /// replay becomes one contiguous copy; otherwise this walks the normalized
+    /// edit list without retaining an output-sized cache.
+    #[inline]
+    pub fn apply_into_bytes(&self, output: &mut Vec<u8>) -> ApplySummary {
+        output.clear();
+        if output.capacity() < self.output_size {
+            output.reserve(self.output_size);
+        }
+        if let Some(rendered) = self.rendered.get() {
+            output.extend_from_slice(rendered.as_bytes());
+        } else if self.same_size {
+            output.extend_from_slice(self.source.as_bytes());
+            for edit in &self.edits {
+                output[edit.start..edit.end].copy_from_slice(edit.after.as_bytes());
+            }
+        } else {
+            self.fill_output_bytes(output);
+        }
+        ApplySummary {
+            edits_applied: self.edits.len(),
+            bytes_before: self.source.len(),
+            bytes_after: output.len(),
+        }
+    }
+
+    #[inline]
+    fn fill_output(&self, output: &mut String) {
+        if self.same_size {
+            output.push_str(self.source);
+            for edit in &self.edits {
+                output.replace_range(edit.start..edit.end, &edit.after);
+            }
+            return;
+        }
+        if !self.insert_runs.is_empty() {
+            self.fill_output_with_insert_runs(output);
+            return;
+        }
+        let mut cursor = 0_usize;
+        for edit in &self.edits {
+            if edit.start > cursor {
+                output.push_str(&self.source[cursor..edit.start]);
+                cursor = edit.start;
+            }
+            output.push_str(&edit.after);
+            if edit.end > edit.start {
+                cursor = edit.end;
+            }
+        }
+        output.push_str(&self.source[cursor..]);
+    }
+
+    fn fill_output_bytes(&self, output: &mut Vec<u8>) {
+        if !self.insert_runs.is_empty() {
+            self.fill_output_bytes_with_insert_runs(output);
+            return;
+        }
+        let mut cursor = 0_usize;
+        let source = self.source.as_bytes();
+        for edit in &self.edits {
+            if edit.start > cursor {
+                output.extend_from_slice(&source[cursor..edit.start]);
+                cursor = edit.start;
+            }
+            output.extend_from_slice(edit.after.as_bytes());
+            if edit.end > edit.start {
+                cursor = edit.end;
+            }
+        }
+        output.extend_from_slice(&source[cursor..]);
+    }
+
+    fn fill_output_with_insert_runs(&self, output: &mut String) {
+        let mut cursor = 0_usize;
+        self.for_each_execution_chunk(|start, end, after| {
+            if start > cursor {
+                output.push_str(&self.source[cursor..start]);
+                cursor = start;
+            }
+            output.push_str(after);
+            if end > start {
+                cursor = end;
+            }
+        });
+        output.push_str(&self.source[cursor..]);
+    }
+
+    fn fill_output_bytes_with_insert_runs(&self, output: &mut Vec<u8>) {
+        let mut cursor = 0_usize;
+        let source = self.source.as_bytes();
+        self.for_each_execution_chunk(|start, end, after| {
+            if start > cursor {
+                output.extend_from_slice(&source[cursor..start]);
+                cursor = start;
+            }
+            output.extend_from_slice(after.as_bytes());
+            if end > start {
+                cursor = end;
+            }
+        });
+        output.extend_from_slice(&source[cursor..]);
+    }
+
+    fn for_each_execution_chunk(&self, mut visit: impl FnMut(usize, usize, &str)) {
+        let mut edit_index = 0_usize;
+        let mut run_index = 0_usize;
+        while edit_index < self.edits.len() {
+            if let Some(run) = self.insert_runs.get(run_index)
+                && run.first_edit == edit_index
+            {
+                visit(run.start, run.start, &run.after);
+                edit_index = run.past_last_edit;
+                run_index += 1;
+            } else {
+                let edit = &self.edits[edit_index];
+                visit(edit.start, edit.end, &edit.after);
+                edit_index += 1;
+            }
+        }
+    }
+
+    #[inline]
+    fn rendered_output(&self) -> &String {
+        self.rendered.get_or_init(|| {
+            let mut output = String::with_capacity(self.output_size);
+            self.fill_output(&mut output);
+            output
+        })
+    }
+
+    /// Returns a lazily materialized, cached view of the complete output.
+    ///
+    /// This is the zero-copy replay surface for consumers that can borrow the
+    /// result. The first call allocates and renders the output; later calls are
+    /// constant-time. Streaming through [`Self::chunks`] or [`Self::write_to`]
+    /// does not initialize this cache.
+    #[must_use]
+    #[inline]
+    pub fn rendered_text(&self) -> &str {
+        self.rendered_output()
+    }
+
+    /// Returns whether [`Self::rendered_text`] currently retains an
+    /// output-sized materialization.
+    #[must_use]
+    pub fn has_rendered_text(&self) -> bool {
+        self.rendered.get().is_some()
+    }
+
+    /// Releases the optional output-sized materialization.
+    ///
+    /// The normalized edit plan remains valid and later uncached applications
+    /// still use the same atomic admission result.
+    pub fn clear_rendered_text(&mut self) {
+        drop(self.rendered.take());
     }
 
     /// Iterates over the validated output without allocating a final [`String`].
@@ -283,6 +516,12 @@ impl<'source> PreparedEdits<'source> {
         )?;
         self.output_size =
             prepared_output_size(self.source.len(), &self.edits, self.max_output_size)?;
+        self.same_size = self
+            .edits
+            .iter()
+            .all(|edit| edit.end - edit.start == edit.after.len());
+        self.insert_runs = coalesce_insert_runs(&self.edits);
+        self.rendered = OnceLock::new();
         Ok(self)
     }
 
@@ -353,6 +592,88 @@ impl<'source> PreparedEdits<'source> {
     }
 }
 
+fn coalesce_insert_runs(edits: &[PreparedEdit]) -> Vec<InsertRun> {
+    let mut runs = Vec::new();
+    let mut retained_bytes = 0_usize;
+    let mut first = 0_usize;
+    while first < edits.len() {
+        let start = edits[first].start;
+        if edits[first].end != start {
+            first += 1;
+            continue;
+        }
+        let mut past_last = first + 1;
+        while past_last < edits.len()
+            && edits[past_last].start == start
+            && edits[past_last].end == start
+        {
+            past_last += 1;
+        }
+        if past_last - first > 1 {
+            let run_bytes = edits[first..past_last]
+                .iter()
+                .map(|edit| edit.after.len())
+                .sum();
+            if run_bytes <= MAX_COALESCED_INSERT_BYTES - retained_bytes {
+                let mut after = String::with_capacity(run_bytes);
+                for edit in &edits[first..past_last] {
+                    after.push_str(&edit.after);
+                }
+                runs.push(InsertRun {
+                    first_edit: first,
+                    past_last_edit: past_last,
+                    start,
+                    after,
+                });
+                retained_bytes += run_bytes;
+            }
+        }
+        first = past_last;
+    }
+    runs
+}
+
 fn shifted(offset: usize, delta: i128) -> Option<usize> {
     usize::try_from(i128::try_from(offset).ok()?.checked_add(delta)?).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{application::ProvenanceSet, model::Provenance};
+
+    use super::{MAX_COALESCED_INSERT_BYTES, PreparedEdit, coalesce_insert_runs};
+
+    fn prepared(start: usize, end: usize, after: String, order: usize) -> PreparedEdit {
+        PreparedEdit {
+            start,
+            end,
+            order,
+            after,
+            provenance: ProvenanceSet::new(Provenance::new(Provenance::EXACT_LSP)),
+        }
+    }
+
+    #[test]
+    fn coalesced_insert_storage_has_one_global_hard_ceiling() {
+        let half = MAX_COALESCED_INSERT_BYTES / 2;
+        let edits = vec![
+            prepared(0, 0, "a".repeat(half / 2), 0),
+            prepared(0, 0, "b".repeat(half / 2), 1),
+            prepared(1, 2, "X".to_owned(), 2),
+            prepared(2, 2, "c".repeat(half / 2 + 1), 3),
+            prepared(2, 2, "d".repeat(half / 2), 4),
+        ];
+        let runs = coalesce_insert_runs(&edits);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].after.len(), half);
+        assert!(
+            runs.iter().map(|run| run.after.len()).sum::<usize>() <= MAX_COALESCED_INSERT_BYTES
+        );
+
+        let oversized = vec![
+            prepared(0, 0, "a".repeat(half + 1), 0),
+            prepared(0, 0, "b".repeat(half), 1),
+        ];
+        assert!(coalesce_insert_runs(&oversized).is_empty());
+    }
 }

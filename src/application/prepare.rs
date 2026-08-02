@@ -1,14 +1,15 @@
 use crate::{
     coordinates::SparseLineIndex,
-    error::{EditError, ErrorCode},
+    error::{ByteSpan, DiagnosticLimits, EditError, ErrorCode},
     limits::ApplyLimits,
     model::{ByteEdit, Position, PositionEncoding, Provenance, TextEdit},
     validation::validate_text_edit,
 };
 
 use super::{
-    AppliedText, PreparedEdits,
+    AppliedText, PreparedEdit, PreparedEdits, ProvenanceSet,
     execute::{finish_apply, finish_prepare},
+    ranges::{empty_rank, output_size_from_totals},
 };
 
 #[derive(Clone, Copy)]
@@ -16,7 +17,6 @@ pub(super) struct Candidate<'edit> {
     pub(super) start: usize,
     pub(super) end: usize,
     pub(super) order: usize,
-    pub(super) before: &'edit str,
     pub(super) after: &'edit str,
     pub(super) provenance: &'edit Provenance,
 }
@@ -56,17 +56,22 @@ pub fn apply_edits_with_encoding_and_limits(
 }
 
 /// Validates and applies strict UTF-8 byte-range edits atomically in memory.
+#[inline]
 pub fn apply_byte_edits(source: &str, edits: &[ByteEdit]) -> Result<AppliedText, EditError> {
     apply_byte_edits_with_limits(source, edits, ApplyLimits::default())
 }
 
 /// Validates and applies byte-range edits with explicit resource limits.
+#[inline]
 pub fn apply_byte_edits_with_limits(
     source: &str,
     edits: &[ByteEdit],
     limits: ApplyLimits,
 ) -> Result<AppliedText, EditError> {
-    let candidates = byte_candidates(source, edits, limits)?;
+    if let Some(output_size) = preflight_sorted_byte_edits(source, edits, limits)? {
+        return Ok(apply_sorted_byte_edits(source, edits, output_size));
+    }
+    let candidates = byte_candidates_from_validated(edits);
     finish_apply(source, candidates, limits.max_output_bytes)
 }
 
@@ -134,15 +139,27 @@ fn position_candidates<'edit>(
             start,
             end,
             order,
-            before: &edit.before,
             after: &edit.after,
             provenance: &edit.provenance,
         });
+    }
+    // Position admission intentionally completes for the whole batch before
+    // exact-before evidence is checked, matching the v1 deterministic error
+    // precedence contract.
+    for candidate in &candidates {
+        validate_before(
+            source,
+            candidate.start,
+            candidate.end,
+            &edits[candidate.order].before,
+            candidate.order,
+        )?;
     }
     Ok(candidates)
 }
 
 /// Prepares strict UTF-8 byte-range edits for the high-throughput path.
+#[inline]
 pub fn prepare_byte_edits<'source>(
     source: &'source str,
     edits: &[ByteEdit],
@@ -151,12 +168,33 @@ pub fn prepare_byte_edits<'source>(
 }
 
 /// Prepares byte-range edits with explicit resource limits.
+#[inline]
 pub fn prepare_byte_edits_with_limits<'source>(
     source: &'source str,
     edits: &[ByteEdit],
     limits: ApplyLimits,
 ) -> Result<PreparedEdits<'source>, EditError> {
-    let candidates = byte_candidates(source, edits, limits)?;
+    if let Some(output_size) = preflight_sorted_byte_edits(source, edits, limits)? {
+        let prepared = edits
+            .iter()
+            .enumerate()
+            .map(|(order, edit)| PreparedEdit {
+                start: edit.start,
+                end: edit.end,
+                order,
+                after: edit.after.clone(),
+                provenance: ProvenanceSet::new(edit.provenance.clone()),
+            })
+            .collect();
+        return Ok(PreparedEdits::from_validated_parts(
+            source,
+            prepared,
+            output_size,
+            limits.max_edits,
+            limits.max_output_bytes,
+        ));
+    }
+    let candidates = byte_candidates_from_validated(edits);
     finish_prepare(
         source,
         candidates,
@@ -165,25 +203,141 @@ pub fn prepare_byte_edits_with_limits<'source>(
     )
 }
 
-fn byte_candidates<'edit>(
+fn preflight_sorted_byte_edits(
     source: &str,
-    edits: &'edit [ByteEdit],
+    edits: &[ByteEdit],
     limits: ApplyLimits,
-) -> Result<Vec<Candidate<'edit>>, EditError> {
+) -> Result<Option<usize>, EditError> {
     validate_size(source, edits.len(), limits)?;
-    let mut candidates = Vec::with_capacity(edits.len());
+    let mut sorted = true;
+    let mut previous: Option<&ByteEdit> = None;
+    let mut active: Option<(usize, usize)> = None;
+    let mut overlap = None;
+    let mut removed = 0_usize;
+    let mut added = 0_usize;
+    let mut output_overflow = false;
+    let mut first_before_mismatch = None;
+
     for (order, edit) in edits.iter().enumerate() {
         validate_byte_edit(source, edit, order)?;
+        if first_before_mismatch.is_none()
+            && source.as_bytes()[edit.start..edit.end] != *edit.before.as_bytes()
+        {
+            first_before_mismatch = Some(order);
+        }
+        if let Some(left) = previous
+            && byte_edit_order(left, edit).is_gt()
+        {
+            sorted = false;
+        }
+        if let Some((active_end, active_order)) = active
+            && edit.start < active_end
+            && overlap.is_none()
+        {
+            overlap = Some((active_order, order));
+        }
+        if edit.end > edit.start {
+            active = Some((edit.end, order));
+        }
+        removed = removed
+            .checked_add(edit.end - edit.start)
+            .unwrap_or_else(|| {
+                output_overflow = true;
+                usize::MAX
+            });
+        added = added.checked_add(edit.after.len()).unwrap_or_else(|| {
+            output_overflow = true;
+            usize::MAX
+        });
+        previous = Some(edit);
+    }
+
+    if let Some(order) = first_before_mismatch {
+        let edit = &edits[order];
+        validate_before(source, edit.start, edit.end, &edit.before, order)?;
+    }
+
+    if !sorted {
+        return Ok(None);
+    }
+    if let Some((left, right)) = overlap {
+        return Err(EditError::new(
+            ErrorCode::OverlappingEdits,
+            format!("edits {left} and {right} overlap"),
+        )
+        .at_edit(left)
+        .with_related_edit(right));
+    }
+    if output_overflow {
+        return Err(EditError::new(
+            ErrorCode::OutputTooLarge,
+            "output size overflow",
+        ));
+    }
+    output_size_from_totals(source.len(), removed, added, limits.max_output_bytes).map(Some)
+}
+
+fn byte_edit_order(left: &ByteEdit, right: &ByteEdit) -> core::cmp::Ordering {
+    left.start
+        .cmp(&right.start)
+        .then_with(|| empty_rank(left.start, left.end).cmp(&empty_rank(right.start, right.end)))
+        .then_with(|| left.end.cmp(&right.end))
+}
+
+fn apply_sorted_byte_edits(source: &str, edits: &[ByteEdit], output_size: usize) -> AppliedText {
+    let mut text = String::with_capacity(output_size);
+    let mut cursor = 0_usize;
+    for edit in edits {
+        if edit.start > cursor {
+            text.push_str(&source[cursor..edit.start]);
+            cursor = edit.start;
+        }
+        text.push_str(&edit.after);
+        if edit.end > edit.start {
+            cursor = edit.end;
+        }
+    }
+    text.push_str(&source[cursor..]);
+    AppliedText {
+        bytes_before: source.len(),
+        bytes_after: text.len(),
+        edits_applied: edits.len(),
+        text,
+    }
+}
+
+fn byte_candidates_from_validated(edits: &[ByteEdit]) -> Vec<Candidate<'_>> {
+    let mut candidates = Vec::with_capacity(edits.len());
+    for (order, edit) in edits.iter().enumerate() {
         candidates.push(Candidate {
             start: edit.start,
             end: edit.end,
             order,
-            before: &edit.before,
             after: &edit.after,
             provenance: &edit.provenance,
         });
     }
-    Ok(candidates)
+    candidates
+}
+
+fn validate_before(
+    source: &str,
+    start: usize,
+    end: usize,
+    expected: &str,
+    order: usize,
+) -> Result<(), EditError> {
+    let actual = &source[start..end];
+    if actual == expected {
+        return Ok(());
+    }
+    Err(EditError::before_mismatch(
+        ByteSpan::new(start, end),
+        expected,
+        actual,
+        DiagnosticLimits::default(),
+    )
+    .at_edit(order))
 }
 
 pub(super) fn validate_byte_edit(

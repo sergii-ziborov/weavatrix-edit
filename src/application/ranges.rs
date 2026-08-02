@@ -3,7 +3,12 @@ use crate::error::{EditError, ErrorCode};
 use super::PreparedEdit;
 
 pub(super) fn sort_prepared(edits: &mut [PreparedEdit]) {
-    edits.sort_unstable_by(compare_prepared);
+    if !edits
+        .windows(2)
+        .all(|pair| compare_prepared(&pair[0], &pair[1]).is_le())
+    {
+        edits.sort_unstable_by(compare_prepared);
+    }
 }
 
 pub(super) fn compare_prepared(left: &PreparedEdit, right: &PreparedEdit) -> core::cmp::Ordering {
@@ -69,6 +74,15 @@ pub(super) fn output_size(
             .checked_add(after_size)
             .ok_or_else(|| EditError::new(ErrorCode::OutputTooLarge, "output size overflow"))?;
     }
+    output_size_from_totals(source_size, removed, added, maximum)
+}
+
+pub(super) fn output_size_from_totals(
+    source_size: usize,
+    removed: usize,
+    added: usize,
+    maximum: usize,
+) -> Result<usize, EditError> {
     let size = source_size
         .checked_sub(removed)
         .and_then(|value| value.checked_add(added))

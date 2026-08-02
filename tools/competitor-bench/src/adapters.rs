@@ -60,6 +60,10 @@ impl<'source> Adapters<'source> {
             expected,
         };
         adapters.verify_output_equivalence();
+        assert!(
+            !adapters.weavatrix_prepared.has_rendered_text(),
+            "correctness verification must not warm the optional rendered cache"
+        );
         adapters
     }
 
@@ -88,16 +92,67 @@ impl<'source> Adapters<'source> {
             &weavatrix_prepared,
         );
 
+        let mut weavatrix_reused = String::with_capacity(self.expected.len());
+        let summary = self.weavatrix_prepared.apply_into(&mut weavatrix_reused);
+        assert_eq!(summary.bytes_before, self.workload.source.len());
+        assert_eq!(summary.bytes_after, self.expected.len());
+        assert_eq!(summary.edits_applied, self.workload.edits.len());
+        assert_output(
+            "weavatrix-edit caller buffer",
+            &self.expected,
+            &weavatrix_reused,
+        );
+
         let mago_prepared = self.mago_prepared.clone().finish();
         assert_output(
             "mago-text-edit prepared",
             self.expected.as_bytes(),
-            mago_prepared,
+            &mago_prepared,
         );
+        let mut mago_reused = String::with_capacity(self.expected.len());
+        mago_reused.push_str(
+            std::str::from_utf8(mago_prepared.as_ref())
+                .expect("benchmark replacements are valid UTF-8"),
+        );
+        assert_output("mago-text-edit caller buffer", &self.expected, &mago_reused);
 
         let mut ra_prepared = self.workload.source.clone();
         self.ra_prepared.apply(&mut ra_prepared);
-        assert_output("ra_ap_text_edit prepared", &self.expected, ra_prepared);
+        assert_output("ra_ap_text_edit prepared", &self.expected, &ra_prepared);
+
+        let mut ra_reused = String::with_capacity(self.expected.len());
+        ra_reused.push_str(&self.workload.source);
+        self.ra_prepared.apply(&mut ra_reused);
+        assert_output("ra_ap_text_edit caller buffer", &self.expected, &ra_reused);
+
+        let mut weavatrix_bytes = Vec::with_capacity(self.expected.len());
+        let byte_summary = self
+            .weavatrix_prepared
+            .apply_into_bytes(&mut weavatrix_bytes);
+        assert_eq!(byte_summary.bytes_before, self.workload.source.len());
+        assert_eq!(byte_summary.bytes_after, self.expected.len());
+        assert_eq!(byte_summary.edits_applied, self.workload.edits.len());
+        assert_output(
+            "weavatrix-edit caller Vec",
+            self.expected.as_bytes(),
+            &weavatrix_bytes,
+        );
+
+        let mut mago_bytes = Vec::with_capacity(self.expected.len());
+        mago_bytes.extend_from_slice(mago_prepared.as_ref());
+        assert_output(
+            "mago-text-edit caller Vec",
+            self.expected.as_bytes(),
+            &mago_bytes,
+        );
+
+        let mut ra_bytes = Vec::with_capacity(self.expected.len());
+        ra_bytes.extend_from_slice(ra_reused.as_bytes());
+        assert_output(
+            "ra_ap_text_edit caller Vec",
+            self.expected.as_bytes(),
+            &ra_bytes,
+        );
 
         let chunked = self.weavatrix_prepared.chunks().collect::<String>();
         assert_output("weavatrix-edit chunks", &self.expected, chunked);

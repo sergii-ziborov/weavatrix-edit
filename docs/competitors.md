@@ -32,7 +32,7 @@ be rechecked before publishing a later comparison.
 
 ## Capability matrix
 
-| Capability | Weavatrix Edit 0.1.1 | Mago Text Edit 1.45.0 | rust-analyzer `804ee7d` / `ra_ap` 0.0.241 | typst-edit 0.1.0 | lsp-textdocument 0.5.0 |
+| Capability | Weavatrix Edit 0.1.2 | Mago Text Edit 1.45.0 | rust-analyzer `804ee7d` / `ra_ap` 0.0.241 | typst-edit 0.1.0 | lsp-textdocument 0.5.0 |
 | --- | --- | --- | --- | --- | --- |
 | Primary boundary | Untrusted, evidence-backed source plans | Fast byte-buffer edit accumulation | Trusted internal IDE edits | Typst-aware source rewriting | LSP document state and coordinate mapping |
 | Native edit coordinates | Strict UTF-8/UTF-16/UTF-32 line/character plus byte API | `u32` byte ranges | `u32` byte ranges | `usize` byte ranges | UTF-8/UTF-16/UTF-32 LSP positions |

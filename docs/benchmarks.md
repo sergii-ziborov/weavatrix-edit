@@ -1,6 +1,6 @@
 # Benchmark methodology
 
-No public competitor result is reported for `weavatrix-edit` 0.1.1. The current
+No public competitor result is reported for `weavatrix-edit` 0.1.2. The current
 `edit_engine` benchmark is an internal smoke measurement. The independent
 `tools/competitor-bench` harness verifies exact byte-output parity before timing
 Mago, rust-analyzer, typst-edit, and Weavatrix, but no run is public evidence

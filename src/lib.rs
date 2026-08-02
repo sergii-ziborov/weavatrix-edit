@@ -25,7 +25,7 @@ pub use error::{
     ByteSpan, DiagnosticLimits, EditError, ErrorCode, MismatchDetails, TextPreview,
     ValidationReport,
 };
-pub use limits::{ApplyLimits, BatchLimits, LineIndexLimits, PlanLimits};
+pub use limits::{ApplyLimits, BatchLimits, LineIndexLimits, MAX_PLAN_OPERATION_BYTES, PlanLimits};
 pub use model::{
     ByteEdit, Completeness, EDIT_PLAN_SCHEMA, EditPlan, FileEdit, Position, PositionEncoding,
     Provenance, TextEdit, TextRange,

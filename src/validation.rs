@@ -4,7 +4,7 @@ use blazingly_json::Value;
 
 use crate::{
     error::{EditError, ErrorCode},
-    limits::PlanLimits,
+    limits::{MAX_PLAN_OPERATION_BYTES, PlanLimits},
     model::{Completeness, EDIT_PLAN_SCHEMA, EditPlan, FileEdit, TextEdit},
     path::{portable_path_key, validate_plan_path},
 };
@@ -54,6 +54,11 @@ pub fn validate_edit_plan(
             ErrorCode::InvalidPlan,
             "plan.operation is required",
         ));
+    }
+    if plan.operation.len() > MAX_PLAN_OPERATION_BYTES {
+        return Err(too_large(format!(
+            "plan.operation exceeds the {MAX_PLAN_OPERATION_BYTES}-byte limit"
+        )));
     }
     if plan.files.is_empty() {
         return Err(EditError::new(

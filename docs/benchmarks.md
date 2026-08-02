@@ -22,6 +22,11 @@ summaries, and every default-ceiling sample:
 
 - [Windows clean-commit evidence](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/benchmark-results/2026-08-02-windows-clean-228f952.md)
 
+Version 0.1.3 adds only a pre-execution bound for the plan operation label; it
+does not change coordinate resolution or edit-application hot paths. The 0.1.2
+timing bundle therefore remains historical engine evidence rather than being
+relabeled as a new timing run.
+
 The default-ceiling caller-String median was 2.14 ms for Weavatrix and 5.44 ms
 for Mago. The conservative fastest-competitor-p25 / Weavatrix-p75 gate passed
 at 2.24x. The full matrix remains deliberately mixed and is not a universal 2x

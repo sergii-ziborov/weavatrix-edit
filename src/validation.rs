@@ -149,11 +149,10 @@ pub(crate) fn validate_text_edit(edit: &TextEdit, index: usize) -> Result<(), Ed
         return Err(invalid_edit("before and after are identical", index));
     }
     if !edit.provenance.is_applicable() {
-        return Err(EditError::new(
-            ErrorCode::UnprovenEdit,
-            format!("provenance {} is not applicable", edit.provenance.as_str()),
-        )
-        .at_edit(index));
+        return Err(
+            EditError::new(ErrorCode::UnprovenEdit, "edit provenance is not applicable")
+                .at_edit(index),
+        );
     }
     Ok(())
 }

@@ -32,7 +32,7 @@ be rechecked before publishing a later comparison.
 
 ## Capability matrix
 
-| Capability | Weavatrix Edit 0.1.0 | Mago Text Edit 1.45.0 | rust-analyzer `804ee7d` / `ra_ap` 0.0.241 | typst-edit 0.1.0 | lsp-textdocument 0.5.0 |
+| Capability | Weavatrix Edit 0.1.1 | Mago Text Edit 1.45.0 | rust-analyzer `804ee7d` / `ra_ap` 0.0.241 | typst-edit 0.1.0 | lsp-textdocument 0.5.0 |
 | --- | --- | --- | --- | --- | --- |
 | Primary boundary | Untrusted, evidence-backed source plans | Fast byte-buffer edit accumulation | Trusted internal IDE edits | Typst-aware source rewriting | LSP document state and coordinate mapping |
 | Native edit coordinates | Strict UTF-8/UTF-16/UTF-32 line/character plus byte API | `u32` byte ranges | `u32` byte ranges | `usize` byte ranges | UTF-8/UTF-16/UTF-32 LSP positions |
@@ -48,9 +48,11 @@ be rechecked before publishing a later comparison.
 | Bounded original-source admission | Yes | Incremental and batch admission, but no hard budgets | Builder stages trusted edits without source validation | No | No |
 | Sequential current-document session | No; separate future layer | No; every offset addresses the original source | No | No | Yes; later changes address already-modified text |
 | Streaming result | Borrowed chunks and caller-owned `Write` | No | No | No | No |
+| Structured normalized preview | Exact source/output ranges, borrowed text, provenance, and byte statistics | No dedicated API | Builder/plan inspection without source proof | No dedicated API | Document updates, not immutable-plan preview |
 | Arbitrary binary source | No; strict UTF-8 source | Yes | No | No | No |
 | Hard source/edit/output budgets | Yes | No | No | No | No |
-| Rejection diagnostics | File/edit/related-edit indices | Result category only; no edit index | Conflict returned or assertion; no edit index | Conflicting ranges/offset; no edit index | Not a plan-validation result |
+| Bounded line-index allocation | Fallible full index plus sparse one-shot resolution | Not a line-coordinate engine | Not a line-coordinate engine | Not a line-coordinate engine | No equivalent documented allocation ceiling |
+| Rejection diagnostics | Bounded multi-error report with indices, ranges, and truncated expected/actual evidence | Result category only; no edit index | Conflict returned or assertion; no edit index | Conflicting ranges/offset; no edit index | Not a plan-validation result |
 | Versioned multi-file JSON plan | Extensible v1 envelope and schema | Optional per-type Serde, no equivalent envelope | No | Optional serialization, no equivalent envelope | LSP document types, no equivalent envelope |
 | Filesystem transaction | No | No | No | No | No |
 

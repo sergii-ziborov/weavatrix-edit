@@ -2,6 +2,146 @@ use core::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// Resource ceilings for diagnostics collected without applying edits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiagnosticLimits {
+    /// Maximum number of diagnostics retained in one report.
+    pub max_items: usize,
+    /// Maximum UTF-8 bytes retained from each expected or actual text value.
+    pub max_preview_bytes: usize,
+}
+
+impl Default for DiagnosticLimits {
+    fn default() -> Self {
+        Self {
+            max_items: 32,
+            max_preview_bytes: 256,
+        }
+    }
+}
+
+/// A half-open UTF-8 byte range in the immutable source revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ByteSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl ByteSpan {
+    #[must_use]
+    pub const fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+}
+
+/// A bounded diagnostic rendering of source text.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPreview {
+    byte_len: usize,
+    text: String,
+    truncated: bool,
+}
+
+impl TextPreview {
+    fn new(text: &str, max_bytes: usize) -> Self {
+        let mut end = text.len().min(max_bytes);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self {
+            byte_len: text.len(),
+            text: text[..end].to_owned(),
+            truncated: end < text.len(),
+        }
+    }
+
+    #[must_use]
+    pub const fn byte_len(&self) -> usize {
+        self.byte_len
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    #[must_use]
+    pub const fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+/// Structured evidence for an exact-before mismatch.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MismatchDetails {
+    source_range: ByteSpan,
+    expected: TextPreview,
+    actual: TextPreview,
+}
+
+/// Bounded result of checking a complete edit set without applying it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationReport {
+    diagnostics: Vec<EditError>,
+    total_diagnostics: usize,
+    truncated: bool,
+}
+
+impl ValidationReport {
+    pub(crate) fn new(diagnostics: Vec<EditError>, total_diagnostics: usize) -> Self {
+        Self {
+            truncated: diagnostics.len() < total_diagnostics,
+            diagnostics,
+            total_diagnostics,
+        }
+    }
+
+    /// Returns true when the full checked set had no validation failures.
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.total_diagnostics == 0
+    }
+
+    /// Diagnostics retained under [`DiagnosticLimits::max_items`].
+    #[must_use]
+    pub fn diagnostics(&self) -> &[EditError] {
+        &self.diagnostics
+    }
+
+    /// Total failures observed, including omitted diagnostics.
+    #[must_use]
+    pub const fn total_diagnostics(&self) -> usize {
+        self.total_diagnostics
+    }
+
+    /// Returns true when some observed diagnostics were omitted.
+    #[must_use]
+    pub const fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+impl MismatchDetails {
+    #[must_use]
+    pub const fn source_range(&self) -> ByteSpan {
+        self.source_range
+    }
+
+    #[must_use]
+    pub const fn expected(&self) -> &TextPreview {
+        &self.expected
+    }
+
+    #[must_use]
+    pub const fn actual(&self) -> &TextPreview {
+        &self.actual
+    }
+}
+
 /// Stable machine-readable failure categories.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -59,6 +199,8 @@ pub struct EditError {
     edit_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     related_edit_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mismatch: Option<Box<MismatchDetails>>,
 }
 
 impl EditError {
@@ -69,6 +211,27 @@ impl EditError {
             file_index: None,
             edit_index: None,
             related_edit_index: None,
+            mismatch: None,
+        }
+    }
+
+    pub(crate) fn before_mismatch(
+        source_range: ByteSpan,
+        expected: &str,
+        actual: &str,
+        limits: DiagnosticLimits,
+    ) -> Self {
+        Self {
+            code: ErrorCode::BeforeMismatch,
+            message: "source text does not match the exact before guard".to_owned(),
+            file_index: None,
+            edit_index: None,
+            related_edit_index: None,
+            mismatch: Some(Box::new(MismatchDetails {
+                source_range,
+                expected: TextPreview::new(expected, limits.max_preview_bytes),
+                actual: TextPreview::new(actual, limits.max_preview_bytes),
+            })),
         }
     }
 
@@ -115,6 +278,12 @@ impl EditError {
     #[must_use]
     pub const fn related_edit_index(&self) -> Option<usize> {
         self.related_edit_index
+    }
+
+    /// Bounded expected/actual evidence for [`ErrorCode::BeforeMismatch`].
+    #[must_use]
+    pub fn mismatch(&self) -> Option<&MismatchDetails> {
+        self.mismatch.as_deref()
     }
 }
 

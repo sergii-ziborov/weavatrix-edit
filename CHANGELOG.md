@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-08-02
+
+- Corrected installation instructions to use the published crates.io package.
+- Added crates.io and docs.rs release links and badges.
+- Added a secret-backed, manually dispatched GitHub publication workflow.
+
 ## 0.1.1 — 2026-08-02
 
 - Added fallible full line indexing with explicit line and byte ceilings.

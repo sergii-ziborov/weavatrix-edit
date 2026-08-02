@@ -1,6 +1,8 @@
 # Weavatrix Edit
 
 [![CI](https://github.com/sergii-ziborov/weavatrix-edit/actions/workflows/ci.yml/badge.svg)](https://github.com/sergii-ziborov/weavatrix-edit/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/weavatrix-edit.svg)](https://crates.io/crates/weavatrix-edit)
+[![docs.rs](https://docs.rs/weavatrix-edit/badge.svg)](https://docs.rs/weavatrix-edit)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/LICENSE)
 
@@ -60,11 +62,13 @@ shape here; a transaction layer must compare it with the actual file.
 
 ```toml
 [dependencies]
-weavatrix-edit = { git = "https://github.com/sergii-ziborov/weavatrix-edit" }
+weavatrix-edit = "0.1"
 ```
 
-The minimum supported Rust version is 1.88. A crates.io release is not claimed
-until the package has been published and independently verified there.
+Or run `cargo add weavatrix-edit`. The minimum supported Rust version is 1.88.
+Published versions are available on
+[crates.io](https://crates.io/crates/weavatrix-edit), with API documentation on
+[docs.rs](https://docs.rs/weavatrix-edit).
 
 ## Quick start
 
@@ -285,7 +289,7 @@ This is a capability comparison, not a speed ranking. See
 
 ## Performance evidence
 
-No public competitor performance result is claimed for version 0.1.1. The
+No public competitor performance result is claimed for version 0.1.2. The
 repository contains a native smoke benchmark and a separate output-equivalent
 byte-edit harness for Mago, rust-analyzer, and typst-edit. A ranking will be
 published only after the harness, environment, and raw samples are recorded and

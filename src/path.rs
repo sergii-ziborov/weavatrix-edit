@@ -35,10 +35,24 @@ pub fn validate_plan_path(path: &str, max_bytes: usize) -> Result<(), EditError>
 /// Returns a conservative key for detecting paths that alias on Windows.
 #[must_use]
 pub fn portable_path_key(path: &str) -> String {
-    path.split('/')
-        .map(|segment| segment.trim_end_matches(['.', ' ']).to_lowercase())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut key = String::with_capacity(path.len());
+    for (index, segment) in path.split('/').enumerate() {
+        if index != 0 {
+            key.push('/');
+        }
+        let trimmed = segment.trim_end_matches(['.', ' ']);
+        if trimmed.is_ascii() {
+            for character in trimmed.chars() {
+                key.push(character.to_ascii_lowercase());
+            }
+        } else {
+            // `str::to_lowercase` is context-sensitive (Greek final sigma), so
+            // non-ASCII segments fold as a whole, exactly like the previous
+            // per-segment implementation.
+            key.push_str(&trimmed.to_lowercase());
+        }
+    }
+    key
 }
 
 fn validate_segment(segment: &str) -> Result<(), EditError> {
@@ -113,5 +127,27 @@ mod tests {
     fn portable_key_folds_case_and_windows_suffixes() {
         assert_eq!(super::portable_path_key("Src/Foo.RS"), "src/foo.rs");
         assert_eq!(super::portable_path_key("src./Foo "), "src/foo");
+    }
+
+    #[test]
+    fn portable_key_matches_the_segment_wise_lowercase_reference() {
+        for path in [
+            "src/lib.rs",
+            "Src/Foo.RS",
+            "src./Foo ",
+            "a//b.rs ",
+            "trailing/",
+            "src/模块_0001/Файл_0001.TS",
+            "greek\u{3a3}/UNIT.rs",
+            "mixed\u{130}name/ascii.rs",
+            "\u{212b}ngstr\u{f6}m/UNIT.rs",
+        ] {
+            let reference = path
+                .split('/')
+                .map(|segment| segment.trim_end_matches(['.', ' ']).to_lowercase())
+                .collect::<Vec<_>>()
+                .join("/");
+            assert_eq!(super::portable_path_key(path), reference, "{path:?}");
+        }
     }
 }

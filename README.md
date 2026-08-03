@@ -26,6 +26,8 @@ either be returned in memory or streamed to a caller-owned `std::io::Write`.
 - exact `before` checks, Unicode-scalar boundaries, overlap detection, and
   stable same-position insertion order;
 - bounded operation labels, source, edit-count, output-size, and multi-file plan validation;
+- zero-copy validation views for higher-level planners that already own
+  `FileEdit`-compatible fields and must not clone edit text;
 - fallible reusable line indexing with explicit line-count and index-byte
   ceilings;
 - bounded incremental admission of original-source byte edits with atomic
@@ -111,6 +113,8 @@ whole set before constructing output, so earlier edits never shift later ones.
 | `LineIndex`, `LineIndexLimits` | Strict UTF-8/UTF-16/UTF-32 position conversion, with a fallible bounded constructor |
 | `EditPlan`, `FileEdit` | Extensible multi-file `weavatrix.edit-plan.v1` wire model |
 | `validate_edit_plan` | Validate schema, paths, provenance, hashes, uniqueness, and budgets |
+| `BorrowedFileEdit`, `validate_file_edits` | Validate arbitrary borrowed file/edit slices through the same internal engine, without cloning text |
+| `EditValidationStats` | Owned edit-count and text-byte totals returned by borrowed validation |
 | `PlanLimits`, `ApplyLimits`, `BatchLimits` | Explicit resource ceilings with conservative defaults |
 | `diagnose_edits`, `diagnose_byte_edits` | Non-mutating multi-error preflight with bounded retained diagnostics |
 | `DiagnosticLimits`, `ValidationReport` | Hard item/preview ceilings and structured exact-before mismatch evidence |
@@ -121,6 +125,16 @@ a transaction layer can enforce an aggregate multi-file budget before writing.
 Plan operation labels have the patch-compatible hard ceiling
 `MAX_PLAN_OPERATION_BYTES` (4 KiB); text, file, and edit ceilings remain
 caller-configurable through `PlanLimits`.
+
+Higher-level plan crates can assemble a small slice of `BorrowedFileEdit`
+views over their own operation model. `validate_file_edits` applies exactly the
+same path, hash, provenance, extension-key, uniqueness, and aggregate-budget
+checks used by `EditPlan::validate_with`; only the edit strings and extension
+trees remain borrowed. Schema and completeness belong to the caller's envelope.
+Each view declares the reserved member names of its source envelope through
+`reserved_extension_keys`; `BorrowedFileEdit::from(&FileEdit)` supplies
+`FILE_EDIT_RESERVED_EXTENSION_KEYS` automatically, while a different envelope
+must name its own fields explicitly.
 
 Hot replay loops can retain their output allocation. `apply_into` refills a
 caller-owned `String`; `apply_into_bytes` writes the same guaranteed-valid UTF-8

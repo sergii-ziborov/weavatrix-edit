@@ -31,7 +31,10 @@ pub use model::{
     Provenance, TextEdit, TextRange,
 };
 pub use path::{portable_path_key, validate_plan_path};
-pub use validation::{ValidatedEditPlan, validate_edit_plan};
+pub use validation::{
+    BorrowedFileEdit, EditValidationStats, FILE_EDIT_RESERVED_EXTENSION_KEYS, ValidatedEditPlan,
+    validate_edit_plan, validate_file_edits,
+};
 
 /// Crate version compiled into this library.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

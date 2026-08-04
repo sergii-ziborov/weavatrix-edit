@@ -1,11 +1,17 @@
-//! Byte-for-byte reference copy of the pre-0.1.6 envelope model.
+//! Standalone reference copy of the envelope model.
 #![allow(dead_code)] // Each test binary uses its own subset of this module.
 //!
-//! Until 0.1.5, `TextEdit`, `FileEdit`, and `EditPlan` derived their serde
-//! implementations with `#[serde(flatten)]` extension maps. The manual
-//! implementations that replaced them must stay observably identical, so this
-//! module keeps the old derive-based model verbatim for direct comparisons of
-//! serialized bytes, decoded values, and error messages.
+//! `TextEdit`, `FileEdit`, and `EditPlan` derive their serde implementations
+//! with `#[serde(flatten)]` extension maps. This module restates that shape
+//! independently, so any future change to the shipped model — hand-written
+//! codecs, a different extension representation, or a lazier capture — must
+//! still produce identical serialized bytes, decoded values, and error
+//! messages.
+//!
+//! Note for anyone reading a ratio against this module: it is a copy of the
+//! same derives, so comparing decode speed of the shipped model against it
+//! measures nothing. Only a structurally different model (see
+//! `docs/decoder-comparison.md`) makes that comparison meaningful.
 
 use std::collections::BTreeMap;
 

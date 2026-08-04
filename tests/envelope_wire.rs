@@ -1,5 +1,5 @@
-//! Wire equivalence between the manual envelope serde implementations and the
-//! pre-0.1.6 `#[serde(flatten)]` derive they replaced.
+//! Wire equivalence between the shipped envelope model and an independent
+//! reference statement of the same wire shape.
 //!
 //! Every assertion runs through two independent serde drivers,
 //! `blazingly_json` and `serde_json`, because the crate is public and callers

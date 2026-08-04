@@ -1,10 +1,20 @@
 //! Manual decode microbenchmark for plan-sized envelopes.
 //!
-//! It records where multi-file decode time actually goes: the shipped model
-//! against the standalone reference envelope in `flatten_reference`, and
-//! `blazingly-json` against `serde_json` on the same corpora. Both pairs
-//! measured within noise on a 500-file plan, which is why the envelope keeps
-//! `#[serde(flatten)]` and the crate keeps its decoder.
+//! Both comparisons in this file are deliberately weak, and the reasons are
+//! recorded in `docs/decoder-comparison.md`:
+//!
+//! - `flatten_reference` restates the *same* derives as the shipped model, so
+//!   a ratio between them is a tautology, not evidence about extension
+//!   representation. Isolating that cost needs a structurally different model.
+//! - Both arms carry `#[serde(flatten)]`, whose buffering is a large additive
+//!   constant shared by every driver, and this test builds without
+//!   cross-crate LTO. Both effects compress driver ratios toward 1.0.
+//!
+//! Under a fair model and a production profile, `blazingly-json` decodes
+//! faster than `serde_json` on every realistic corpus, and materializing
+//! extension maps costs several times the decode itself. Use this file for
+//! coarse cost sanity checks only; see the doc for the measurements that
+//! carry conclusions.
 //!
 //! Run on demand; the harness skips it by default:
 //!

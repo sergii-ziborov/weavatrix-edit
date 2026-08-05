@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use blazingly_json::Value;
 
 use crate::{
+    envelope::{EDIT_PLAN_FIELDS, FILE_EDIT_FIELDS},
     error::{EditError, ErrorCode},
     limits::{MAX_PLAN_OPERATION_BYTES, PlanLimits},
     model::{Completeness, EDIT_PLAN_SCHEMA, EditPlan, FileEdit, TextEdit},
@@ -13,7 +14,10 @@ use crate::{
 pub(crate) use files::validate_text_edit;
 
 /// Reserved JSON member names for a [`FileEdit`] extension map.
-pub const FILE_EDIT_RESERVED_EXTENSION_KEYS: &[&str] = &["path", "sha256", "edits"];
+///
+/// These are exactly the declared wire members of a `FileEdit`, so an
+/// extension key can never silently shadow one.
+pub const FILE_EDIT_RESERVED_EXTENSION_KEYS: &[&str] = &FILE_EDIT_FIELDS;
 
 /// Zero-copy view of one exact file edit set.
 #[derive(Clone, Copy, Debug)]
@@ -92,11 +96,7 @@ pub fn validate_edit_plan(
             format!("schemaVersion must be {EDIT_PLAN_SCHEMA}"),
         ));
     }
-    files::validate_extension_keys(
-        &plan.extensions,
-        &["schemaVersion", "operation", "files", "completeness"],
-        ErrorCode::InvalidPlan,
-    )?;
+    files::validate_extension_keys(&plan.extensions, &EDIT_PLAN_FIELDS, ErrorCode::InvalidPlan)?;
     validate_collection(&plan.operation, plan.files.len(), limits)?;
     validate_completeness(plan.completeness.as_ref())?;
     let stats = files::validate_file_views(plan.files.iter().map(BorrowedFileEdit::from), limits)?;

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.6 — 2026-08-05
+
+- Added `DeclaredEditPlan`, an additive decode path that recovers an `EditPlan`
+  without materializing any extension member. It accepts and rejects exactly
+  the documents `EditPlan` does, with the same error messages, and yields
+  identical declared data with empty extension maps. Dropping extensions is
+  lossy by design: a plan recovered through it must not be re-serialized as if
+  it were the original.
+- Replaced the derived `#[serde(flatten)]` codecs on `TextEdit`, `FileEdit`,
+  and `EditPlan` with hand-written ones. Serialized bytes, accepted documents,
+  and duplicate/missing/invalid-type messages are unchanged and pinned against
+  an independent restatement of the original derives on two serde drivers.
+- Tied the reserved extension-key lists to the wire field names themselves, so
+  a future member rename cannot silently open a shadowing collision.
+- Measured, in one process against the published 0.1.5 tree: decoding a plan
+  that carries extensions through `DeclaredEditPlan` is 1.80x-2.17x faster on
+  both decoders under both build profiles. Plans without undeclared members are
+  unchanged in either direction.
+- No public API was removed or changed.
+
 ## 0.1.2 — 2026-08-02
 
 - Added allocation-reusing `PreparedEdits::apply_into` and

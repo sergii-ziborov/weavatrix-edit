@@ -1,13 +1,27 @@
 # Changelog
 
+## 0.1.7 — 2026-08-05
+
+- Corrected the `DeclaredEditPlan` documentation. 0.1.6 claimed it accepts and
+  rejects exactly the documents `EditPlan` does; that is false for content
+  inside undeclared members. Capturing decode materializes each undeclared
+  member into a `Value` and fails on anything the value model cannot represent
+  (out-of-range numbers, lone surrogate escapes, nesting past the driver's
+  depth limit), while the declared-only path consumes that member without
+  inspecting it and accepts the document. Declared members are unaffected.
+  A declared-only decode is therefore safe for a terminal consumer of declared
+  data and unsafe as an input-rejection gate. `tests/declared_divergence.rs`
+  pins the divergence so it cannot be re-asserted away.
+- No code change; behavior is identical to 0.1.6.
+
 ## 0.1.6 — 2026-08-05
 
 - Added `DeclaredEditPlan`, an additive decode path that recovers an `EditPlan`
-  without materializing any extension member. It accepts and rejects exactly
-  the documents `EditPlan` does, with the same error messages, and yields
-  identical declared data with empty extension maps. Dropping extensions is
-  lossy by design: a plan recovered through it must not be re-serialized as if
-  it were the original.
+  without materializing any extension member. It yields identical declared data
+  with empty extension maps, and reports declared-member errors identically.
+  Dropping extensions is lossy by design: a plan recovered through it must not
+  be re-serialized as if it were the original. See 0.1.7 for the corrected
+  statement of how the two decodes differ on undeclared content.
 - Replaced the derived `#[serde(flatten)]` codecs on `TextEdit`, `FileEdit`,
   and `EditPlan` with hand-written ones. Serialized bytes, accepted documents,
   and duplicate/missing/invalid-type messages are unchanged and pinned against

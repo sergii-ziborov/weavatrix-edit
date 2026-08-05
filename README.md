@@ -321,9 +321,9 @@ then verify each file hash against the current repository.
 
 Retaining extensions means building one owned JSON value per undeclared member,
 at every level. A consumer that only validates or applies a plan never reads
-them and can decode through `DeclaredEditPlan`, which accepts and rejects
-exactly the same documents with the same error messages, recovers identical
-declared data, and skips undeclared members structurally:
+them and can decode through `DeclaredEditPlan`, which recovers identical
+declared data, reports declared-member errors identically, and skips undeclared
+members structurally:
 
 ```rust
 use weavatrix_edit::DeclaredEditPlan;
@@ -352,6 +352,21 @@ The recovered plan is not round-trippable: re-serializing it emits declared
 members only. Decode through `EditPlan` whenever extensions must survive.
 Either path is driver-independent; both are exercised against `blazingly-json`
 and `serde_json`.
+
+The two paths are not interchangeable as input validators. Capturing decode
+materializes every undeclared member into a `Value`, so a member the value
+model cannot represent — a number outside the representable range, a lone
+surrogate escape, nesting past the driver's depth limit — fails the whole
+decode. `DeclaredEditPlan` consumes that member without inspecting it and
+accepts the document. Declared members behave identically either way; the
+divergence is confined to content the declared-only path never looks at, and
+`tests/declared_divergence.rs` pins it.
+
+The consequence for callers: a declared-only decode is safe for a terminal
+consumer of declared data, and unsafe as the gate that is supposed to reject
+malformed input. If undeclared members must be bounded or rejected, decode
+through `EditPlan` and enforce a budget over the resulting maps — this crate's
+`PlanLimits` does not bound extension payloads.
 
 ## Competitive position
 

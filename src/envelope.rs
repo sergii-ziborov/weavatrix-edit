@@ -58,8 +58,10 @@ pub(crate) const EDIT_PLAN_FIELDS: [&str; 4] =
 
 /// How one decode pass treats members that are not declared by the envelope.
 ///
-/// Both policies match declared members identically, so a declared-only decode
-/// accepts and rejects exactly the documents the capturing decode does.
+/// Both policies match declared members identically. They diverge on undeclared
+/// content: [`Capture`] builds a value and fails on anything the value model
+/// cannot represent, while [`Discard`] never inspects it. See
+/// [`DeclaredEditPlan`] for what that means for callers.
 trait ExtensionPolicy: Copy {
     /// Retained key representation for an undeclared member.
     type Key;
@@ -689,10 +691,25 @@ where
 /// consumer that only validates or applies a plan never reads those values and
 /// should not pay for them.
 ///
-/// This wrapper accepts and rejects exactly the documents [`EditPlan`] accepts
-/// and rejects, with the same error messages, but skips undeclared members
-/// structurally instead of building a key and a value tree for each one. The
-/// [`EditPlan`] it yields has empty `extensions` at every level.
+/// This wrapper recovers identical declared data and reports declared-member
+/// errors identically, but skips undeclared members structurally instead of
+/// building a key and a value tree for each one. The [`EditPlan`] it yields has
+/// empty `extensions` at every level.
+///
+/// # It is not an input-rejection gate
+///
+/// The two decodes do **not** accept the same documents. Capturing decode
+/// materializes each undeclared member into a value, so a member the value
+/// model cannot represent — a number outside the representable range, a lone
+/// surrogate escape, nesting past the driver's depth limit — fails the whole
+/// decode. This wrapper consumes that member without inspecting it and
+/// succeeds. The divergence is confined to content this path never looks at,
+/// and `tests/declared_divergence.rs` pins it.
+///
+/// Use it as a terminal consumer of declared data. Do not use it as the gate
+/// that rejects malformed input: [`PlanLimits`](crate::PlanLimits) does not
+/// bound extension payloads either, so a caller that must constrain undeclared
+/// content has to decode through [`EditPlan`] and enforce its own budget.
 ///
 /// # Extensions are dropped, not hidden
 ///

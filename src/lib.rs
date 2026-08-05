@@ -3,6 +3,7 @@
 
 mod application;
 mod coordinates;
+mod envelope;
 mod error;
 mod limits;
 mod model;
@@ -21,6 +22,7 @@ pub use application::{
     prepare_edits_with_encoding_and_limits, prepare_edits_with_limits,
 };
 pub use coordinates::LineIndex;
+pub use envelope::DeclaredEditPlan;
 pub use error::{
     ByteSpan, DiagnosticLimits, EditError, ErrorCode, MismatchDetails, TextPreview,
     ValidationReport,

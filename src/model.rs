@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 use blazingly_json::Value;
 use serde::{Deserialize, Serialize};
 
+// `TextEdit`, `FileEdit`, and `EditPlan` implement serde by hand in
+// `crate::envelope`; see that module for why the derived `#[serde(flatten)]`
+// extension maps were replaced and what wire behaviour is pinned.
 use crate::{
     error::EditError,
     limits::PlanLimits,
@@ -77,8 +80,10 @@ impl Completeness {
 }
 
 /// One exact replacement over the original source text.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Undeclared JSON members are retained in `extensions`. Decode through
+/// [`DeclaredEditPlan`](crate::DeclaredEditPlan) to skip them entirely.
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextEdit {
     pub start_line: u32,
     pub start_char: u32,
@@ -87,7 +92,6 @@ pub struct TextEdit {
     pub before: String,
     pub after: String,
     pub provenance: Provenance,
-    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, Value>,
 }
 
@@ -181,13 +185,11 @@ impl TextEdit {
 }
 
 /// All edits for one repository-relative UTF-8 source file.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FileEdit {
     pub path: String,
     pub sha256: String,
     pub edits: Vec<TextEdit>,
-    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, Value>,
 }
 
@@ -204,15 +206,17 @@ impl FileEdit {
 }
 
 /// Versioned, extensible multi-file edit-plan envelope.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Decoding retains every undeclared member at all three levels so a v1
+/// consumer can round-trip extensions it does not interpret. A consumer that
+/// only validates or applies the plan can decode through
+/// [`DeclaredEditPlan`](crate::DeclaredEditPlan) and skip that work.
+#[derive(Clone, Debug, PartialEq)]
 pub struct EditPlan {
     pub schema_version: String,
     pub operation: String,
     pub files: Vec<FileEdit>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completeness: Option<Completeness>,
-    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, Value>,
 }
 

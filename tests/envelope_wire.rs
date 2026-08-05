@@ -17,7 +17,8 @@ use flatten_reference::{
 };
 use serde::de::DeserializeOwned;
 use weavatrix_edit::{
-    Completeness, EDIT_PLAN_SCHEMA, EditPlan, FileEdit, Position, Provenance, TextEdit, TextRange,
+    Completeness, DeclaredEditPlan, EDIT_PLAN_SCHEMA, EditPlan, FileEdit, Position, Provenance,
+    TextEdit, TextRange,
 };
 
 const SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -151,8 +152,70 @@ where
     }
 }
 
+/// Clears every extension map, giving the value a declared-only decode must
+/// produce from the same document.
+fn without_extensions(plan: &EditPlan) -> EditPlan {
+    let mut plan = plan.clone();
+    plan.extensions.clear();
+    for file in &mut plan.files {
+        file.extensions.clear();
+        for edit in &mut file.edits {
+            edit.extensions.clear();
+        }
+    }
+    plan
+}
+
+/// `DeclaredEditPlan` is an additive decode path, not a second dialect. It must
+/// accept exactly the documents `EditPlan` accepts, reject the rest with the
+/// byte-identical message, and recover identical declared data on both drivers.
+fn assert_declared_parity(json: &str, capturing: Option<&EditPlan>) {
+    let blazingly = blazingly_json::from_slice::<DeclaredEditPlan>(json.as_bytes());
+    let serde = serde_json::from_slice::<DeclaredEditPlan>(json.as_bytes());
+
+    let Some(capturing) = capturing else {
+        let expected = blazingly_json::from_slice::<EditPlan>(json.as_bytes())
+            .expect_err("capturing decode rejects this document");
+        assert_eq!(
+            blazingly
+                .expect_err("declared decode must reject it too")
+                .to_string(),
+            expected.to_string(),
+            "blazingly_json declared-only error for {json}"
+        );
+        let expected = serde_json::from_slice::<EditPlan>(json.as_bytes())
+            .expect_err("capturing decode rejects this document");
+        assert_eq!(
+            serde
+                .expect_err("declared decode must reject it too")
+                .to_string(),
+            expected.to_string(),
+            "serde_json declared-only error for {json}"
+        );
+        return;
+    };
+
+    let expected = without_extensions(capturing);
+    assert_eq!(
+        *blazingly
+            .expect("declared decode accepts what the capturing decode accepts")
+            .plan(),
+        expected,
+        "blazingly_json declared-only decode of {json}"
+    );
+    assert_eq!(
+        *serde
+            .expect("declared decode accepts what the capturing decode accepts")
+            .plan(),
+        expected,
+        "serde_json declared-only decode of {json}"
+    );
+}
+
 fn assert_plan_parity(json: &str) -> Option<EditPlan> {
-    assert_decode_parity::<EditPlan, FlatEditPlan>(json, to_edit_plan)
+    let plan = assert_decode_parity::<EditPlan, FlatEditPlan>(json, to_edit_plan);
+    assert_declared_parity(json, plan.as_ref());
+    plan
 }
 
 fn assert_file_parity(json: &str) -> Option<FileEdit> {
@@ -562,6 +625,62 @@ fn extension_values_of_every_json_type_decode_identically() {
     assert_eq!(plan.extensions["aFloat"].as_f64(), Some(1.25));
     assert!(plan.extensions["aNull"].is_null());
     assert_serialize_parity(&plan);
+}
+
+#[test]
+fn declared_only_decode_drops_extensions_at_every_level_and_still_validates() {
+    let capturing = assert_plan_parity(&extension_fixture()).expect("fixture decodes");
+    assert!(!capturing.extensions.is_empty());
+    assert!(!capturing.files[0].extensions.is_empty());
+    assert!(!capturing.files[0].edits[0].extensions.is_empty());
+
+    let declared: DeclaredEditPlan =
+        blazingly_json::from_str(&extension_fixture()).expect("declared decode succeeds");
+    let plan = declared.into_plan();
+    assert!(plan.extensions.is_empty(), "envelope extensions dropped");
+    assert!(
+        plan.files[0].extensions.is_empty(),
+        "file extensions dropped"
+    );
+    assert!(
+        plan.files[0].edits[0].extensions.is_empty(),
+        "edit extensions dropped"
+    );
+
+    // Declared data is untouched, and the recovered plan is a full participant.
+    assert_eq!(plan.schema_version, capturing.schema_version);
+    assert_eq!(plan.operation, capturing.operation);
+    assert_eq!(plan.completeness, capturing.completeness);
+    assert_eq!(plan.files[0].path, capturing.files[0].path);
+    assert_eq!(
+        plan.files[0].edits,
+        without_extensions(&capturing).files[0].edits
+    );
+    assert!(plan.validate().is_ok());
+
+    // Dropping is lossy on purpose: re-encoding emits declared members only.
+    let reencoded = blazingly_json::to_string(&plan).expect("declared plan encodes");
+    assert!(!reencoded.contains("graphRevision"));
+    assert!(!reencoded.contains("\"language\""));
+    assert_eq!(
+        blazingly_json::from_str::<EditPlan>(&reencoded).expect("re-decodes"),
+        plan
+    );
+
+    // A reserved member name can never reach an extension map through the wire,
+    // so the declared-only path cannot hide a collision the capturing path
+    // would have rejected: the duplicate spelling fails as a duplicate field.
+    let shadowed = format!(
+        r#"{{"schemaVersion":"weavatrix.edit-plan.v1","operation":"x","files":[{{"path":"a.ts","sha256":"{SHA256}","edits":[],"path":"b.ts"}}]}}"#
+    );
+    assert!(assert_plan_parity(&shadowed).is_none());
+
+    // Programmatically built collisions are still rejected by validation.
+    let mut collision = base_plan();
+    collision.files[0]
+        .extensions
+        .insert("path".to_owned(), value(r#""shadow""#));
+    assert!(collision.validate().is_err());
 }
 
 #[test]

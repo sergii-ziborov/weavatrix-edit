@@ -4,6 +4,7 @@ use blazingly_json::Value;
 
 use super::{BorrowedFileEdit, EditValidationStats, too_large};
 use crate::{
+    envelope::TEXT_EDIT_FIELDS,
     error::{EditError, ErrorCode},
     limits::PlanLimits,
     model::TextEdit,
@@ -42,20 +43,8 @@ where
 }
 
 pub(crate) fn validate_text_edit(edit: &TextEdit, index: usize) -> Result<(), EditError> {
-    validate_extension_keys(
-        &edit.extensions,
-        &[
-            "startLine",
-            "startChar",
-            "endLine",
-            "endChar",
-            "before",
-            "after",
-            "provenance",
-        ],
-        ErrorCode::InvalidEdit,
-    )
-    .map_err(|error| error.at_edit(index))?;
+    validate_extension_keys(&edit.extensions, &TEXT_EDIT_FIELDS, ErrorCode::InvalidEdit)
+        .map_err(|error| error.at_edit(index))?;
     let range = edit.range();
     if range.start.line == 0 || range.end.line == 0 {
         return Err(invalid_edit("lines are 1-based", index));

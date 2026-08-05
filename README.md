@@ -112,6 +112,7 @@ whole set before constructing output, so earlier edits never shift later ones.
 | `WriteSummary` | Successful streamed-output counts without retaining the complete result |
 | `LineIndex`, `LineIndexLimits` | Strict UTF-8/UTF-16/UTF-32 position conversion, with a fallible bounded constructor |
 | `EditPlan`, `FileEdit` | Extensible multi-file `weavatrix.edit-plan.v1` wire model |
+| `DeclaredEditPlan` | Decode the same envelope without materializing extension members |
 | `validate_edit_plan` | Validate schema, paths, provenance, hashes, uniqueness, and budgets |
 | `BorrowedFileEdit`, `validate_file_edits` | Validate arbitrary borrowed file/edit slices through the same internal engine, without cloning text |
 | `EditValidationStats` | Owned edit-count and text-byte totals returned by borrowed validation |
@@ -318,6 +319,40 @@ also checks cross-field ordering, `before != after`, portable path aliases,
 resource budgets, and the applicable provenance set. A worktree consumer must
 then verify each file hash against the current repository.
 
+Retaining extensions means building one owned JSON value per undeclared member,
+at every level. A consumer that only validates or applies a plan never reads
+them and can decode through `DeclaredEditPlan`, which accepts and rejects
+exactly the same documents with the same error messages, recovers identical
+declared data, and skips undeclared members structurally:
+
+```rust
+use weavatrix_edit::DeclaredEditPlan;
+
+let json = r#"{
+    "schemaVersion": "weavatrix.edit-plan.v1",
+    "operation": "rename_symbol",
+    "createdAt": "2026-08-01T12:00:00Z",
+    "files": [{
+        "path": "src/user.ts",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "edits": [{
+            "startLine": 10, "startChar": 8, "endLine": 10, "endChar": 15,
+            "before": "getUser", "after": "getCustomer", "provenance": "EXACT_LSP"
+        }]
+    }]
+}"#;
+
+let plan = blazingly_json::from_str::<DeclaredEditPlan>(json)?.into_plan();
+assert!(plan.validate().is_ok());
+assert!(plan.extensions.is_empty());
+# Ok::<(), blazingly_json::Error>(())
+```
+
+The recovered plan is not round-trippable: re-serializing it emits declared
+members only. Decode through `EditPlan` whenever extensions must survive.
+Either path is driver-independent; both are exercised against `blazingly-json`
+and `serde_json`.
+
 ## Competitive position
 
 There is no exact established equivalent combining strict LSP coordinates,
@@ -358,6 +393,18 @@ one recorded row; Weavatrix's direct caller-Vec path was 2.16x faster there.
 See [the benchmark contract](docs/benchmarks.md) and the
 [exact clean-commit environment, matrix, and raw samples](https://github.com/sergii-ziborov/weavatrix-edit/blob/main/benchmark-results/2026-08-02-windows-clean-228f952.md).
 
+Envelope decoding is measured separately. Retaining extensions is the dominant
+cost of decoding a large multi-file plan, because it builds one owned JSON
+value per undeclared member at every level. Against the published 0.1.5 derive,
+linked into the same process so both arms share machine state,
+`DeclaredEditPlan` decodes a 500-file Unicode plan carrying extensions 1.80x to
+2.06x faster, and a 1 KiB message 1.83x to 2.17x faster — resolvable on
+`blazingly-json` and `serde_json`, under both a stock release and a fat-LTO
+profile. On plans with no undeclared members every cell overlaps: nothing to
+skip, and no regression. Removing `#[serde(flatten)]` while still capturing
+extensions is worth at most about 1.2x on its own. Full matrix, protocol, and
+quartiles: [decoder and envelope decode costs](docs/decoder-comparison.md).
+
 ## Limitations
 
 - Input is valid UTF-8 Rust `str`; arbitrary binary data and non-UTF-8 source
@@ -375,6 +422,8 @@ See [the benchmark contract](docs/benchmarks.md) and the
 - `completeness: "PARTIAL"` is valid; deciding whether incomplete evidence is
   acceptable belongs to the caller.
 - Extension fields are preserved as JSON values but have no core semantics.
+  `DeclaredEditPlan` drops them on decode; that is lossy by design, and a plan
+  recovered through it must not be re-serialized as if it were the original.
 - Provenance labels prove which planner supplied a range; this crate verifies
   the range and exact source text, not the planner's semantic reasoning.
 
